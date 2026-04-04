@@ -218,12 +218,22 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
 }
 
 
+class ClassifierConfig(BaseModel):
+  """Image classifier settings."""
+  enabled: bool = True
+  use_gpu: bool = False
+  threshold: float = 0.50
+  images_directory: Path = Field(default=Path("data/images"))
+  max_images_per_listing: int = 3
+
+
 class AppConfig(BaseModel):
   """Root application configuration."""
   database: DatabaseConfig = Field(default_factory=DatabaseConfig)
   logging: LoggingConfig = Field(default_factory=LoggingConfig)
   transport: TransportConfig = Field(default_factory=TransportConfig)
   scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
+  classifier: ClassifierConfig = Field(default_factory=ClassifierConfig)
   websites: dict[str, WebsiteConfig] = Field(default_factory=lambda: dict(_DEFAULT_WEBSITES))
 
   def website(self, name: str) -> WebsiteConfig:

@@ -245,8 +245,13 @@ async def _discover_async(app: AppContext, website: str | None, fetch: bool) -> 
       )
 
       if fetch and stats.new_listings > 0:
-        fetched = await loop.fetch_unfetched(session, website_filter=website)
-        console.print(f"[green]Fetched details for {fetched} listings.[/green]")
+        fetch_stats = await loop.fetch_unfetched(session, website_filter=website)
+        console.print(
+          f"[green]Fetch complete:[/green] "
+          f"{fetch_stats.listings_fetched} fetched, "
+          f"{fetch_stats.listings_classified} classified, "
+          f"{fetch_stats.listings_rejected} rejected"
+        )
 
 
 @main.command("watch")
@@ -452,6 +457,147 @@ async def _search_async(
       except Exception as error:
         console.print(f"  [red]Error: {error}[/red]")
         logger.error("Search error on %s: %s", website_name, error, exc_info=True)
+
+
+# -------------------------------------------------------------------
+# Saved searches management
+# -------------------------------------------------------------------
+
+
+@main.command("searches")
+@pass_context
+def list_searches(app: AppContext) -> None:
+  """List all saved search queries."""
+  with app.database.session() as session:
+    searches = app.repository.get_active_searches(session)
+    table = Table(title=f"Saved Searches ({len(searches)})")
+    table.add_column("ID", style="dim")
+    table.add_column("Name", style="cyan")
+    table.add_column("Query", style="green")
+    table.add_column("Website")
+    table.add_column("Last Run")
+    table.add_column("Results", justify="right")
+
+    for search_query in searches:
+      website_name = search_query.website.name if search_query.website else "all"
+      last_run = search_query.last_run_at.strftime("%Y-%m-%d %H:%M") if search_query.last_run_at else "never"
+      table.add_row(
+        str(search_query.id),
+        search_query.name,
+        search_query.query_text,
+        website_name,
+        last_run,
+        str(search_query.result_count or 0),
+      )
+
+    console.print(table)
+
+
+@main.command("add-search")
+@click.argument("query")
+@click.option("--name", type=str, default=None, help="Name for the search (defaults to query text).")
+@click.option("--website", type=str, multiple=True, help="Website(s) to search (repeatable). Omit for all.")
+@pass_context
+def add_search(app: AppContext, query: str, name: str | None, website: tuple[str, ...]) -> None:
+  """Add a saved search query."""
+  if name is None:
+    name = query
+
+  with app.database.session() as session:
+    if website:
+      for website_name in website:
+        website_obj = app.repository.get_website_by_name(session, website_name)
+        if website_obj is None:
+          console.print(f"[red]Website '{website_name}' not in database. Run seed-websites first.[/red]")
+          continue
+        search_name = f"{name} [{website_name}]"
+        app.repository.upsert_search_query(
+          session,
+          website_id=website_obj.id,
+          name=search_name,
+          query_text=query,
+        )
+        console.print(f"[green]Added search:[/green] '{search_name}' on {website_name}")
+    else:
+      app.repository.upsert_search_query(
+        session, website_id=None, name=name, query_text=query,
+      )
+      console.print(f"[green]Added search:[/green] '{name}' (all websites)")
+    session.commit()
+
+
+# -------------------------------------------------------------------
+# Full pipeline command
+# -------------------------------------------------------------------
+
+
+@main.command("run")
+@click.option("--website", type=str, default=None, help="Only process this website.")
+@click.option("--no-classify", is_flag=True, default=False, help="Skip image classification.")
+@click.option("--once", is_flag=True, default=False, help="Single pass instead of continuous loop.")
+@pass_context
+def run_pipeline(app: AppContext, website: str | None, no_classify: bool, once: bool) -> None:
+  """Run the full pipeline: discover, fetch, classify, and watch."""
+  asyncio.run(_run_pipeline_async(app, website, not no_classify, once))
+
+
+async def _run_pipeline_async(
+  app: AppContext,
+  website: str | None,
+  classify: bool,
+  once: bool,
+) -> None:
+  from auction_tracker.orchestrator.discovery import DiscoveryLoop
+  from auction_tracker.orchestrator.watcher import Watcher
+  from auction_tracker.transport.router import TransportRouter
+
+  async with TransportRouter(app.config) as router:
+    discovery = DiscoveryLoop(app.config, router, app.repository)
+    watcher = Watcher(app.config, app.database, router, app.repository)
+
+    # Step 1: Discover new listings.
+    console.print("\n[bold cyan]Step 1: Running saved searches...[/bold cyan]")
+    with app.database.session() as session:
+      discovery_stats, _new_listings = await discovery.run_all(session, website_filter=website)
+      console.print(
+        f"  {discovery_stats.searches_run} searches, "
+        f"{discovery_stats.results_found} results, "
+        f"{discovery_stats.new_listings} new"
+      )
+
+    # Step 2: Fetch full details + classify.
+    console.print("\n[bold cyan]Step 2: Fetching details and classifying...[/bold cyan]")
+    with app.database.session() as session:
+      fetch_stats = await discovery.fetch_unfetched(
+        session, website_filter=website, classify=classify,
+      )
+      console.print(
+        f"  {fetch_stats.listings_fetched} fetched, "
+        f"{fetch_stats.listings_classified} classified, "
+        f"{fetch_stats.listings_rejected} rejected"
+      )
+
+    # Step 3: Load active listings and watch.
+    console.print("\n[bold cyan]Step 3: Monitoring active listings...[/bold cyan]")
+    with app.database.session() as session:
+      count = watcher.load_active_listings(session)
+      console.print(f"  {count} listings in watch queue")
+
+    if once:
+      watch_stats = await watcher.run_once()
+      console.print(
+        f"  {watch_stats.checks_performed} checked, "
+        f"{watch_stats.listings_updated} updated, "
+        f"{watch_stats.listings_completed} completed"
+      )
+    else:
+      console.print("  Starting continuous monitoring (Ctrl+C to stop)...")
+      stop_event = asyncio.Event()
+      try:
+        await watcher.run_forever(stop_event)
+      except KeyboardInterrupt:
+        stop_event.set()
+        console.print("\n[yellow]Pipeline stopped.[/yellow]")
 
 
 # -------------------------------------------------------------------

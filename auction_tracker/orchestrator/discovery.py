@@ -29,6 +29,9 @@ class DiscoveryStats:
   searches_run: int = 0
   results_found: int = 0
   new_listings: int = 0
+  listings_fetched: int = 0
+  listings_classified: int = 0
+  listings_rejected: int = 0
   errors: int = 0
 
 
@@ -144,17 +147,25 @@ class DiscoveryLoop:
     self,
     session: Session,
     website_filter: str | None = None,
-  ) -> int:
-    """Fetch full details for listings that were only discovered
-    via search results (not yet fully fetched).
+    classify: bool = True,
+  ) -> DiscoveryStats:
+    """Fetch full details for listings discovered via search.
 
-    Returns the number of listings successfully fetched.
+    Optionally runs image classification to filter out non-pen
+    listings. Returns detailed stats.
     """
+    from auction_tracker.orchestrator.images import (
+      classify_listing as run_classification,
+    )
+    from auction_tracker.orchestrator.images import (
+      download_listing_images,
+    )
+
+    stats = DiscoveryStats()
     listings = self._repo.get_listings_needing_fetch(session, website_name=website_filter)
     if not listings:
-      return 0
+      return stats
 
-    fetched_count = 0
     for listing in listings:
       website_name = listing.website.name
       if not ParserRegistry.has(website_name):
@@ -168,15 +179,45 @@ class DiscoveryLoop:
         result = await self._router.fetch(website_name, listing.url)
         scraped = parser.parse_listing(result.html)
         self._ingest.ingest_listing(session, listing.website_id, scraped)
+        stats.listings_fetched += 1
+
+        # Run classification if enabled and images are available.
+        if classify and scraped.image_urls:
+          image_paths = await download_listing_images(
+            scraped.image_urls,
+            listing.id,
+            self._config.classifier,
+          )
+          if image_paths:
+            is_relevant, score, top_classes = run_classification(
+              image_paths, self._config.classifier,
+            )
+            stats.listings_classified += 1
+            if not is_relevant:
+              stats.listings_rejected += 1
+              from auction_tracker.database.models import ListingStatus
+              self._repo.mark_listing_status(
+                session, listing.id, ListingStatus.CANCELLED,
+              )
+              top_labels = ", ".join(f"{label} ({prob:.0%})" for label, prob in top_classes)
+              logger.info(
+                "Rejected listing %s (score=%.0f%%): %s",
+                listing.external_id, score * 100, top_labels,
+              )
+
         session.commit()
-        fetched_count += 1
-      except Exception as error:
+      except Exception:
         session.rollback()
+        stats.errors += 1
         logger.error(
-          "Error fetching listing %s: %s",
-          listing.external_id, error,
+          "Error fetching listing %s",
+          listing.external_id,
           exc_info=True,
         )
 
-    logger.info("Fetched full details for %d/%d listings", fetched_count, len(listings))
-    return fetched_count
+    logger.info(
+      "Fetch complete: %d fetched, %d classified, %d rejected, %d errors",
+      stats.listings_fetched, stats.listings_classified,
+      stats.listings_rejected, stats.errors,
+    )
+    return stats
