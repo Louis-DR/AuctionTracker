@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AuctionTracker{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <style>
+    /* Stats cards */
+    .stat-number {
+      font-size: 2.4rem;
+      font-weight: 700;
+      margin: 0;
+      line-height: 1.2;
+    }
+    .stat-label {
+      font-size: 0.82rem;
+      opacity: 0.65;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 0.25rem;
+    }
+
+    /* Status and type badges */
+    .badge {
+      display: inline-block;
+      padding: 0.15em 0.55em;
+      border-radius: 0.3em;
+      font-size: 0.78em;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+    }
+    .badge-active   { background: #2ecc40; color: #fff; }
+    .badge-sold     { background: #0074d9; color: #fff; }
+    .badge-unsold   { background: #ff4136; color: #fff; }
+    .badge-upcoming { background: #ffdc00; color: #333; }
+    .badge-cancelled { background: #aaa; color: #fff; }
+    .badge-relisted { background: #b10dc9; color: #fff; }
+    .badge-unknown  { background: #ddd; color: #666; }
+    .badge-auction  { background: #7c3aed; color: #fff; }
+    .badge-buy_now  { background: #f59e0b; color: #fff; }
+    .badge-hybrid   { background: #06b6d4; color: #fff; }
+
+    /* Image gallery */
+    .image-gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    .image-gallery img {
+      width: 100%;
+      height: 180px;
+      object-fit: cover;
+      border-radius: var(--pico-border-radius);
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+      border: 1px solid var(--pico-muted-border-color);
+    }
+    .image-gallery img:hover {
+      transform: scale(1.04);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+    }
+
+    /* Lightbox dialog */
+    dialog.lightbox {
+      max-width: 92vw;
+      max-height: 92vh;
+      padding: 0.5rem;
+      border: none;
+      border-radius: var(--pico-border-radius);
+      background: var(--pico-card-background-color);
+    }
+    dialog.lightbox img {
+      max-width: 90vw;
+      max-height: 85vh;
+      object-fit: contain;
+      display: block;
+      margin: 0 auto;
+    }
+    dialog.lightbox::backdrop {
+      background: rgba(0, 0, 0, 0.82);
+    }
+
+    /* Clickable table rows */
+    .clickable-row {
+      cursor: pointer;
+    }
+    .clickable-row:hover td {
+      background: var(--pico-table-row-stripped-background-color);
+    }
+
+    /* Price display */
+    .price-big {
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: var(--pico-primary);
+    }
+
+    /* Description text */
+    .description-text {
+      white-space: pre-wrap;
+      line-height: 1.7;
+      max-height: 30rem;
+      overflow-y: auto;
+      padding: 1rem;
+      border: 1px solid var(--pico-muted-border-color);
+      border-radius: var(--pico-border-radius);
+      background: var(--pico-card-background-color);
+    }
+
+    /* EUR-converted prices hint */
+    .eur-hint {
+      font-size: 0.82em;
+      color: var(--pico-muted-color);
+      opacity: 0.8;
+    }
+
+    /* Misc helpers */
+    .muted { opacity: 0.55; }
+    .text-right { text-align: right; }
+    .no-wrap { white-space: nowrap; }
+    a.no-underline { text-decoration: none; }
+    .mb-0 { margin-bottom: 0; }
+    .mt-1 { margin-top: 1rem; }
+
+    /* Pagination */
+    .pagination {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .pagination a, .pagination span {
+      padding: 0.35em 0.75em;
+      border-radius: var(--pico-border-radius);
+      font-size: 0.9em;
+      text-decoration: none;
+    }
+    .pagination .current-page {
+      background: var(--pico-primary);
+      color: var(--pico-primary-inverse);
+      font-weight: 600;
+    }
+
+    /* Filter form */
+    .filter-form {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: flex-end;
+      margin-bottom: 1.5rem;
+    }
+    .filter-form label {
+      margin-bottom: 0;
+    }
+    .filter-form .filter-group {
+      flex: 1;
+      min-width: 140px;
+    }
+    .filter-form .filter-group-wide {
+      flex: 2;
+      min-width: 220px;
+    }
+    .filter-form input,
+    .filter-form select {
+      margin-bottom: 0;
+    }
+
+    /* Detail page two-column info */
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+    }
+    @media (max-width: 768px) {
+      .info-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Chart containers */
+    .chart-container {
+      position: relative;
+      margin-bottom: 2rem;
+      padding: 1rem;
+      border: 1px solid var(--pico-muted-border-color);
+      border-radius: var(--pico-border-radius);
+      background: var(--pico-card-background-color);
+    }
+
+    {% block extra_css %}{% endblock %}
+  </style>
+</head>
+<body>
+  <header class="container">
+    <nav>
+      <ul>
+        <li>
+          <a href="/" class="no-underline">
+            <strong>&#128296; AuctionTracker</strong>
+          </a>
+        </li>
+      </ul>
+      <ul>
+        <li><a href="/"{% if active_page == "dashboard" %} aria-current="page"{% endif %}>Dashboard</a></li>
+        <li><a href="/listings"{% if active_page == "listings" %} aria-current="page"{% endif %}>Listings</a></li>
+        <li><a href="/searches"{% if active_page == "searches" %} aria-current="page"{% endif %}>Searches</a></li>
+        <li><a href="/bidders"{% if active_page == "bidders" %} aria-current="page"{% endif %}>Bidders</a></li>
+        <li><a href="/sellers"{% if active_page == "sellers" %} aria-current="page"{% endif %}>Sellers</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="container">
+    <hr>
+    <small class="muted">AuctionTracker &ndash; Price tracking for online auctions</small>
+  </footer>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

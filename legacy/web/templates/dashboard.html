@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% set active_page = "dashboard" %}
+{% block title %}Dashboard – AuctionTracker{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+<!-- Summary stats -->
+<div class="grid">
+  <article>
+    <p class="stat-label">Total Listings</p>
+    <p class="stat-number">{{ total_listings }}</p>
+  </article>
+  <article>
+    <p class="stat-label">Active</p>
+    <p class="stat-number" style="color: #2ecc40;">
+      {{ status_counts.get(ListingStatus.ACTIVE, 0) }}
+    </p>
+  </article>
+  <article>
+    <p class="stat-label">Sold</p>
+    <p class="stat-number" style="color: #0074d9;">
+      {{ status_counts.get(ListingStatus.SOLD, 0) }}
+    </p>
+  </article>
+  <article>
+    <p class="stat-label">Unsold</p>
+    <p class="stat-number" style="color: #ff4136;">
+      {{ status_counts.get(ListingStatus.UNSOLD, 0) }}
+    </p>
+  </article>
+  <article>
+    <p class="stat-label">Rejected</p>
+    <p class="stat-number" style="color: #aaaaaa;">
+      {{ rejected_count }}
+    </p>
+  </article>
+</div>
+
+<!-- Price and website statistics -->
+<div class="grid">
+  <article>
+    <header><strong>Current Prices (Active)</strong></header>
+    {% if price_avg is not none %}
+    <table>
+      <tbody>
+        <tr><td>Average</td><td class="text-right">{{ price_avg|format_price("EUR") }}</td></tr>
+        <tr><td>Minimum</td><td class="text-right">{{ price_min|format_price("EUR") }}</td></tr>
+        <tr><td>Maximum</td><td class="text-right">{{ price_max|format_price("EUR") }}</td></tr>
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No price data yet.</p>
+    {% endif %}
+  </article>
+
+  <article>
+    <header><strong>Sold Prices</strong> <small class="muted">({{ sold_count }} items)</small></header>
+    {% if sold_price_avg is not none %}
+    <table>
+      <tbody>
+        <tr><td>Average</td><td class="text-right">{{ sold_price_avg|format_price("EUR") }}</td></tr>
+        <tr><td>Minimum</td><td class="text-right">{{ sold_price_min|format_price("EUR") }}</td></tr>
+        <tr><td>Maximum</td><td class="text-right">{{ sold_price_max|format_price("EUR") }}</td></tr>
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No sold items yet.</p>
+    {% endif %}
+  </article>
+
+  <article>
+    <header><strong>Websites</strong> <small class="muted">({{ total_websites }})</small></header>
+    {% if website_stats %}
+    <table>
+      <tbody>
+        {% for name, count in website_stats %}
+        <tr><td>{{ name }}</td><td class="text-right">{{ count }} listings</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No websites tracked yet.</p>
+    {% endif %}
+  </article>
+</div>
+
+<!-- Recent listings -->
+<h2>Recent Listings</h2>
+{% if recent_listings %}
+<div style="overflow-x: auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th class="text-right">Price</th>
+        <th class="text-right">Bids</th>
+        <th>Status</th>
+        <th>Type</th>
+        <th>Website</th>
+        <th>Added</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for listing in recent_listings %}
+      <tr class="clickable-row" onclick="location.href='/listings/{{ listing.id }}'">
+        <td>{{ listing.title[:80] }}{% if listing.title|length > 80 %}&hellip;{% endif %}</td>
+        <td class="text-right no-wrap">
+          {% if listing.final_price is not none %}
+            {{ listing.final_price|format_price(listing.currency) }}
+          {% elif listing.current_price is not none %}
+            {{ listing.current_price|format_price(listing.currency) }}
+          {% else %}
+            &ndash;
+          {% endif %}
+        </td>
+        <td class="text-right">{{ listing.bid_count }}</td>
+        <td><span class="badge badge-{{ listing.status.value }}">{{ listing.status.value }}</span></td>
+        <td><span class="badge badge-{{ listing.listing_type.value }}">{{ listing.listing_type.value }}</span></td>
+        <td>{{ listing.website.name if listing.website else "?" }}</td>
+        <td class="no-wrap">{{ listing.created_at|format_datetime }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="muted">No listings in the database yet. Run a search to start tracking!</p>
+{% endif %}
+{% endblock %}

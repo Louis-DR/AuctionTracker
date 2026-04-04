@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% set active_page = "searches" %}
+{% block title %}Searches – AuctionTracker{% endblock %}
+
+{% block extra_css %}
+.rate-bar {
+  display: inline-block;
+  width: 100px;
+  height: 10px;
+  background: #ff4136;
+  border-radius: 5px;
+  overflow: hidden;
+  vertical-align: middle;
+}
+.rate-bar-fill {
+  display: block;
+  height: 100%;
+  background: #2ecc40;
+  border-radius: 5px 0 0 5px;
+}
+.rate-label {
+  display: inline-block;
+  min-width: 3.2em;
+  text-align: right;
+  font-size: 0.85em;
+  font-weight: 600;
+  margin-left: 0.4em;
+}
+.search-card {
+  margin-bottom: 1.5rem;
+}
+.search-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.search-card header .query-text {
+  font-size: 1.1em;
+  font-weight: 700;
+}
+.search-card header .search-meta {
+  font-size: 0.82em;
+  opacity: 0.65;
+}
+.status-pills {
+  display: flex;
+  gap: 0.35em;
+  flex-wrap: wrap;
+}
+.status-pill {
+  display: inline-block;
+  padding: 0.1em 0.5em;
+  border-radius: 0.25em;
+  font-size: 0.75em;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.website-row td {
+  font-size: 0.92em;
+}
+.inactive-search {
+  opacity: 0.5;
+}
+{% endblock %}
+
+{% block content %}
+<h1>Saved Searches</h1>
+
+<!-- Saved search configuration table -->
+{% if saved_searches %}
+<article>
+  <header><strong>Search Queries</strong> <small class="muted">({{ saved_searches|length }})</small></header>
+  <div style="overflow-x: auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Query Text</th>
+          <th>Category</th>
+          <th>Website</th>
+          <th class="text-right">Total</th>
+          <th class="text-right">Accepted</th>
+          <th class="text-right">Verification</th>
+          <th class="text-right">Acceptance</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for search in saved_searches %}
+        <tr class="{{ 'inactive-search' if not search.is_active }}">
+          <td><strong>{{ search.name }}</strong></td>
+          <td>{{ search.query_text }}</td>
+          <td>{{ search.category or "–" }}</td>
+          <td>{{ search.website_name }}</td>
+          <td class="text-right">{{ search.total }}</td>
+          <td class="text-right" style="color: #2ecc40;">{{ search.accepted }}</td>
+          <td class="text-right">{{ search.verification_coverage }}%</td>
+          <td class="text-right">{{ search.acceptance_rate }}%</td>
+          <td class="no-wrap">{{ search.created_at|format_date }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</article>
+{% else %}
+<p class="muted">No saved searches configured. Use the CLI to add search queries.</p>
+{% endif %}
+
+<!-- Per-search statistics -->
+<h2>Search Statistics</h2>
+
+{% if search_stats %}
+<p class="muted" style="margin-bottom: 1rem;">
+  Statistics computed from listings linked to each search query.
+  Verification coverage shows the proportion of listings that have been
+  verified by the classifier. The acceptance rate shows the proportion
+  of verified listings that were identified as writing instruments.
+</p>
+
+{% for search in search_stats %}
+<article class="search-card">
+  <header>
+    <div>
+      <span class="query-text">"{{ search.query_text }}"</span>
+      {% if search.saved_searches %}
+      <span class="search-meta">
+        &mdash;
+        {% for saved in search.saved_searches %}
+        {{ saved.name }}{% if not loop.last %}, {% endif %}
+        {% endfor %}
+      </span>
+      {% endif %}
+    </div>
+    <div>
+      <span class="stat-label" style="font-size: 0.75em;">TOTAL</span>
+      <span style="font-size: 1.4em; font-weight: 700;">{{ search.total }}</span>
+    </div>
+  </header>
+
+  <!-- Summary stats row -->
+  <div class="grid" style="margin-top: 0.75rem;">
+    <div>
+      <small class="muted" style="text-transform: uppercase; letter-spacing: 0.05em;">Verified</small>
+      <p style="font-size: 1.3em; font-weight: 700; margin: 0;">
+        {{ search.verified }}
+        <span class="muted" style="font-size: 0.6em; font-weight: 400;">/ {{ search.total }}</span>
+      </p>
+    </div>
+    <div>
+      <small class="muted" style="text-transform: uppercase; letter-spacing: 0.05em;">Accepted</small>
+      <p style="font-size: 1.3em; font-weight: 700; color: #2ecc40; margin: 0;">
+        {{ search.accepted }}
+      </p>
+    </div>
+    <div>
+      <small class="muted" style="text-transform: uppercase; letter-spacing: 0.05em;">Rejected</small>
+      <p style="font-size: 1.3em; font-weight: 700; color: #aaa; margin: 0;">
+        {{ search.rejected }}
+      </p>
+    </div>
+    <div>
+      <small class="muted" style="text-transform: uppercase; letter-spacing: 0.05em;">Verification Coverage</small>
+      <p style="margin: 0;">
+        {% if search.total > 0 %}
+        <span class="rate-bar">
+          <span class="rate-bar-fill" style="width: {{ search.verification_coverage }}%;"></span>
+        </span>
+        <span class="rate-label">{{ search.verification_coverage }}%</span>
+        {% else %}
+        <span class="muted" style="font-size: 0.85em;">no listings</span>
+        {% endif %}
+      </p>
+    </div>
+    <div>
+      <small class="muted" style="text-transform: uppercase; letter-spacing: 0.05em;">Acceptance Rate</small>
+      <p style="margin: 0;">
+        {% if search.verified > 0 %}
+        <span class="rate-bar">
+          <span class="rate-bar-fill" style="width: {{ search.acceptance_rate }}%;"></span>
+        </span>
+        <span class="rate-label">{{ search.acceptance_rate }}%</span>
+        {% else %}
+        <span class="muted" style="font-size: 0.85em;">not yet verified</span>
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  <!-- Status breakdown -->
+  <div style="margin-top: 0.5rem;">
+    <div class="status-pills">
+      {% for status_label, count in search.by_status.items()|sort %}
+      <span class="status-pill badge-{{ status_label }}">{{ status_label }}: {{ count }}</span>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Links -->
+  <div style="margin-top: 0.75rem;">
+    <a href="/listings?source={{ search.query_text|urlencode }}&_filtered=1" role="button" class="outline" style="font-size: 0.85em; padding: 0.4em 0.8em;">
+      View all {{ search.total }} listings
+    </a>
+  </div>
+
+  <!-- Per-website breakdown table -->
+  {% if search.websites|length > 1 %}
+  <div style="overflow-x: auto; margin-top: 0.75rem;">
+    <table>
+      <thead>
+        <tr>
+          <th>Website</th>
+          <th class="text-right">Total</th>
+          <th class="text-right">Verified</th>
+          <th class="text-right">Accepted</th>
+          <th class="text-right">Rejected</th>
+          <th>Verification</th>
+          <th>Acceptance</th>
+          <th>Status Breakdown</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for website_name, website_data in search.websites.items()|sort %}
+        <tr class="website-row">
+          <td><strong>{{ website_name }}</strong></td>
+          <td class="text-right">{{ website_data.total }}</td>
+          <td class="text-right">{{ website_data.verified }}</td>
+          <td class="text-right" style="color: #2ecc40;">{{ website_data.accepted }}</td>
+          <td class="text-right" style="color: #aaa;">{{ website_data.rejected }}</td>
+          <td>
+            {% if website_data.total > 0 %}
+            <span class="rate-bar">
+              <span class="rate-bar-fill" style="width: {{ website_data.verification_coverage }}%;"></span>
+            </span>
+            <span class="rate-label">{{ website_data.verification_coverage }}%</span>
+            {% else %}
+            <span class="muted" style="font-size: 0.85em;">–</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if website_data.verified > 0 %}
+            <span class="rate-bar">
+              <span class="rate-bar-fill" style="width: {{ website_data.acceptance_rate }}%;"></span>
+            </span>
+            <span class="rate-label">{{ website_data.acceptance_rate }}%</span>
+            {% else %}
+            <span class="muted" style="font-size: 0.85em;">–</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="status-pills">
+              {% for status_label, count in website_data.by_status.items()|sort %}
+              <span class="status-pill badge-{{ status_label }}">{{ status_label }}: {{ count }}</span>
+              {% endfor %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif search.websites|length == 1 %}
+  {% for website_name, website_data in search.websites.items() %}
+  <p class="muted" style="margin-top: 0.5rem; margin-bottom: 0; font-size: 0.85em;">
+    All listings from <strong>{{ website_name }}</strong>
+  </p>
+  {% endfor %}
+  {% endif %}
+</article>
+{% endfor %}
+
+{% else %}
+<p class="muted">
+  No search source data available yet. Run some searches to start
+  collecting statistics. Source tracking is added automatically when
+  searches discover listings.
+</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% set active_page = "bidders" %}
+{% block title %}Bidder {{ username }} – AuctionTracker{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<p><a href="/bidders">&larr; Back to bidders</a></p>
+
+<hgroup>
+  <h1>Bidder: {{ username }}</h1>
+  <p>
+    {% if bidder_country %}Country: {{ bidder_country }}{% endif %}
+    &nbsp;&middot;&nbsp;
+    Active {{ stats.first_bid_time|format_datetime }} – {{ stats.last_bid_time|format_datetime }}
+  </p>
+</hgroup>
+
+<!-- Summary stats -->
+<div class="grid">
+  <article>
+    <p class="stat-label">Listings Bid On</p>
+    <p class="stat-number">{{ stats.listing_count }}</p>
+  </article>
+  <article>
+    <p class="stat-label">Items Won</p>
+    <p class="stat-number" style="color: #2ecc40;">{{ won_listings|length }}</p>
+  </article>
+  <article>
+    <p class="stat-label">Total Spent (EUR)</p>
+    <p class="stat-number" style="color: #0074d9;">{{ "%.2f"|format(total_spent_eur) }}</p>
+  </article>
+  <article>
+    <p class="stat-label">Avg Winning Price (EUR)</p>
+    <p class="stat-number">{{ "%.2f"|format(avg_winning_price) }}</p>
+  </article>
+</div>
+
+<!-- Spending over time chart -->
+{% if spending_timeline %}
+<h2>Spending Over Time</h2>
+<div class="chart-container">
+  <canvas id="spending-chart"></canvas>
+</div>
+{% endif %}
+
+<!-- Won items -->
+{% if won_listings %}
+<h2>Items Won ({{ won_listings|length }})</h2>
+<div style="overflow-x: auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th class="text-right">Final Price (EUR)</th>
+        <th>Website</th>
+        <th>Date</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for listing in won_listings %}
+      <tr class="clickable-row" onclick="location.href='/listings/{{ listing.id }}'">
+        <td>{{ listing.title[:80] }}{% if listing.title|length > 80 %}&hellip;{% endif %}</td>
+        <td class="text-right no-wrap">
+          {% if listing.final_price_eur is not none %}
+            {{ listing.final_price_eur|format_price("EUR") }}
+          {% elif listing.final_price is not none %}
+            {{ listing.final_price|format_price(listing.currency) }}
+          {% else %}
+            &ndash;
+          {% endif %}
+        </td>
+        <td>{{ listing.website.name if listing.website else "?" }}</td>
+        <td class="no-wrap">{{ listing.end_time|format_datetime }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- Recent bids -->
+<h2>Bid History ({{ all_bids|length }}{% if all_bids|length == 500 %}+{% endif %})</h2>
+<div style="overflow-x: auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Listing</th>
+        <th class="text-right">Bid Amount</th>
+        <th class="text-right">EUR</th>
+        <th>Time</th>
+        <th>Type</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for bid in all_bids %}
+      <tr class="clickable-row" onclick="location.href='/listings/{{ bid.listing_id }}'">
+        <td>{{ bid.listing.title[:60] if bid.listing else "?" }}{% if bid.listing and bid.listing.title|length > 60 %}&hellip;{% endif %}</td>
+        <td class="text-right no-wrap"><strong>{{ bid.amount|format_price(bid.currency) }}</strong></td>
+        <td class="text-right no-wrap">
+          {% if bid.amount_eur is not none %}
+            {{ bid.amount_eur|format_price("EUR") }}
+          {% else %}
+            &ndash;
+          {% endif %}
+        </td>
+        <td class="no-wrap">{{ bid.bid_time|format_datetime }}</td>
+        <td>{% if bid.is_automatic %}<span style="color: #f59e0b; font-weight: 600;">auto</span>{% else %}manual{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if spending_timeline %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+<script>
+(function() {
+  var data = {{ spending_timeline|tojson_safe }};
+  var ctx = document.getElementById("spending-chart").getContext("2d");
+
+  new Chart(ctx, {
+    type: "line",
+    data: {
+      datasets: [{
+        label: "Cumulative Spending (EUR)",
+        data: data.map(function(item) {
+          return { x: item.time, y: item.total };
+        }),
+        borderColor: "#0074d9",
+        backgroundColor: "rgba(0, 116, 217, 0.1)",
+        fill: true,
+        stepped: "after",
+        pointRadius: 6,
+        pointHoverRadius: 10,
+        pointBackgroundColor: "#0074d9",
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            title: function(tooltipItems) {
+              var idx = tooltipItems[0].dataIndex;
+              return new Date(data[idx].time).toLocaleDateString();
+            },
+            label: function(context) {
+              return "Total: " + context.parsed.y.toLocaleString(undefined, {minimumFractionDigits: 2}) + " EUR";
+            },
+            afterLabel: function(context) {
+              var idx = context.dataIndex;
+              return data[idx].item + " — " + data[idx].price.toLocaleString(undefined, {minimumFractionDigits: 2}) + " EUR";
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: {
+            tooltipFormat: "PPpp",
+            displayFormats: {
+              day: "MMM d",
+              week: "MMM d",
+              month: "MMM yyyy",
+            }
+          },
+          title: { display: true, text: "Date" },
+        },
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: "EUR" },
+          ticks: {
+            callback: function(value) {
+              return value.toLocaleString();
+            }
+          }
+        }
+      }
+    }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

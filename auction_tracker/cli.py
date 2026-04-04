@@ -1,0 +1,467 @@
+"""CLI entry point using Click.
+
+All commands share a context object that holds the configuration,
+database engine, and repository. Async commands use asyncio.run().
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+
+import click
+from rich.console import Console
+from rich.table import Table
+
+from auction_tracker.config import AppConfig, load_config
+from auction_tracker.database.engine import DatabaseEngine
+from auction_tracker.database.repository import Repository
+from auction_tracker.logging_setup import setup_logging
+
+logger = logging.getLogger(__name__)
+console = Console()
+
+
+class AppContext:
+  """Shared state for all CLI commands."""
+
+  def __init__(self, config: AppConfig) -> None:
+    self.config = config
+    self.database = DatabaseEngine(config.database.path)
+    self.repository = Repository()
+
+
+pass_context = click.make_pass_decorator(AppContext)
+
+
+@click.group()
+@click.option(
+  "--config", "config_path",
+  type=click.Path(exists=False, path_type=Path),
+  default=None,
+  help="Path to YAML configuration file.",
+)
+@click.option(
+  "--verbose", is_flag=True, default=False,
+  help="Enable debug logging.",
+)
+@click.pass_context
+def main(ctx: click.Context, config_path: Path | None, verbose: bool) -> None:
+  """AuctionTracker v2 — Fountain pen auction monitor."""
+  config = load_config(config_path)
+  if verbose:
+    config.logging.level = "DEBUG"
+
+  setup_logging(
+    level=config.logging.level,
+    log_file=config.logging.file,
+    max_bytes=config.logging.max_bytes,
+    backup_count=config.logging.backup_count,
+  )
+
+  app = AppContext(config)
+  app.database.initialize()
+  ctx.ensure_object(dict)
+  ctx.obj = app
+
+
+# -------------------------------------------------------------------
+# Database commands
+# -------------------------------------------------------------------
+
+
+@main.command("init-db")
+@pass_context
+def init_database(app: AppContext) -> None:
+  """Initialize the database (creates tables if needed)."""
+  console.print("[green]Database initialized successfully.[/green]")
+  console.print(f"  Path: {app.config.database.path}")
+
+
+@main.command("seed-websites")
+@pass_context
+def seed_websites(app: AppContext) -> None:
+  """Seed the database with the configured websites."""
+  website_urls = {
+    "ebay": "https://www.ebay.com",
+    "catawiki": "https://www.catawiki.com",
+    "leboncoin": "https://www.leboncoin.fr",
+    "drouot": "https://www.drouot.com",
+    "interencheres": "https://www.interencheres.com",
+    "liveauctioneers": "https://www.liveauctioneers.com",
+    "invaluable": "https://www.invaluable.com",
+    "yahoo_japan": "https://auctions.yahoo.co.jp",
+    "gazette_drouot": "https://www.gazette-drouot.com",
+  }
+
+  with app.database.session() as session:
+    for name, url in website_urls.items():
+      app.repository.get_or_create_website(
+        session, name=name, base_url=url,
+        default_currency=("JPY" if name == "yahoo_japan" else "EUR"),
+      )
+    session.commit()
+
+  console.print(f"[green]Seeded {len(website_urls)} websites.[/green]")
+
+
+# -------------------------------------------------------------------
+# Information commands
+# -------------------------------------------------------------------
+
+
+@main.command("websites")
+@pass_context
+def list_websites(app: AppContext) -> None:
+  """List all configured websites and their status."""
+  table = Table(title="Websites")
+  table.add_column("Name", style="cyan")
+  table.add_column("Transport", style="yellow")
+  table.add_column("Strategy", style="green")
+  table.add_column("Enabled", style="bold")
+  table.add_column("Parser", style="magenta")
+
+  from auction_tracker.parsing.base import ParserRegistry
+
+  for name, website_config in sorted(app.config.websites.items()):
+    has_parser = ParserRegistry.has(name)
+    table.add_row(
+      name,
+      website_config.transport.value,
+      website_config.monitoring_strategy.value,
+      "yes" if website_config.enabled else "no",
+      "yes" if has_parser else "[red]no[/red]",
+    )
+
+  console.print(table)
+
+
+@main.command("parsers")
+@pass_context
+def list_parsers(app: AppContext) -> None:
+  """List all registered parsers and their capabilities."""
+  from auction_tracker.parsing.base import ParserRegistry
+
+  table = Table(title="Registered Parsers")
+  table.add_column("Website", style="cyan")
+  table.add_column("Search", style="green")
+  table.add_column("Listing", style="green")
+  table.add_column("Bids", style="yellow")
+  table.add_column("Seller", style="yellow")
+
+  for name in ParserRegistry.list_registered():
+    parser = ParserRegistry.get(name)
+    capabilities = parser.capabilities
+    table.add_row(
+      name,
+      _yes_no(capabilities.can_search),
+      _yes_no(capabilities.can_parse_listing),
+      _yes_no(capabilities.has_bid_history),
+      _yes_no(capabilities.has_seller_info),
+    )
+
+  console.print(table)
+
+
+@main.command("listings")
+@click.option("--status", type=str, default=None, help="Filter by status.")
+@click.option("--website", type=str, default=None, help="Filter by website.")
+@click.option("--limit", type=int, default=50, help="Max results.")
+@pass_context
+def list_listings(app: AppContext, status: str | None, website: str | None, limit: int) -> None:
+  """List tracked listings."""
+  from sqlalchemy import select
+
+  from auction_tracker.database.models import Listing, ListingStatus, Website
+
+  with app.database.session() as session:
+    statement = select(Listing).limit(limit)
+    if website:
+      statement = statement.join(Website).where(Website.name == website)
+    if status:
+      try:
+        status_enum = ListingStatus(status)
+        statement = statement.where(Listing.status == status_enum)
+      except ValueError:
+        console.print(f"[red]Unknown status: {status}[/red]")
+        return
+    statement = statement.order_by(Listing.updated_at.desc())
+
+    listings = session.scalars(statement).all()
+
+    table = Table(title=f"Listings ({len(listings)})")
+    table.add_column("ID", style="dim")
+    table.add_column("Website", style="cyan")
+    table.add_column("Title", max_width=50)
+    table.add_column("Price", style="green", justify="right")
+    table.add_column("Status", style="yellow")
+    table.add_column("End Time")
+
+    for listing in listings:
+      price = listing.final_price or listing.current_price
+      price_str = f"{price} {listing.currency}" if price else "-"
+      end_str = listing.end_time.strftime("%Y-%m-%d %H:%M") if listing.end_time else "-"
+      table.add_row(
+        str(listing.id),
+        listing.website.name,
+        listing.title[:50],
+        price_str,
+        listing.status.value,
+        end_str,
+      )
+
+    console.print(table)
+
+
+# -------------------------------------------------------------------
+# Operational commands
+# -------------------------------------------------------------------
+
+
+@main.command("discover")
+@click.option("--website", type=str, default=None, help="Only discover for this website.")
+@click.option("--fetch/--no-fetch", default=True, help="Fetch full details for new listings.")
+@pass_context
+def discover(app: AppContext, website: str | None, fetch: bool) -> None:
+  """Run saved searches to discover new listings."""
+  asyncio.run(_discover_async(app, website, fetch))
+
+
+async def _discover_async(app: AppContext, website: str | None, fetch: bool) -> None:
+  from auction_tracker.orchestrator.discovery import DiscoveryLoop
+  from auction_tracker.transport.router import TransportRouter
+
+  async with TransportRouter(app.config) as router:
+    loop = DiscoveryLoop(app.config, router, app.repository)
+    with app.database.session() as session:
+      stats, _new_listings = await loop.run_all(session, website_filter=website)
+      console.print(
+        f"[green]Discovery complete:[/green] "
+        f"{stats.searches_run} searches, "
+        f"{stats.results_found} results, "
+        f"{stats.new_listings} new listings, "
+        f"{stats.errors} errors"
+      )
+
+      if fetch and stats.new_listings > 0:
+        fetched = await loop.fetch_unfetched(session, website_filter=website)
+        console.print(f"[green]Fetched details for {fetched} listings.[/green]")
+
+
+@main.command("watch")
+@click.option("--website", type=str, default=None, help="Only watch this website.")
+@click.option("--once", is_flag=True, default=False, help="Run a single pass instead of looping.")
+@pass_context
+def watch(app: AppContext, website: str | None, once: bool) -> None:
+  """Monitor active listings for price changes and status updates."""
+  asyncio.run(_watch_async(app, website, once))
+
+
+async def _watch_async(app: AppContext, website: str | None, once: bool) -> None:
+  from auction_tracker.orchestrator.watcher import Watcher
+  from auction_tracker.transport.router import TransportRouter
+
+  async with TransportRouter(app.config) as router:
+    watcher = Watcher(app.config, app.database, router, app.repository)
+    with app.database.session() as session:
+      count = watcher.load_active_listings(session)
+      console.print(f"[green]Loaded {count} active listings into watch queue.[/green]")
+
+    if once:
+      stats = await watcher.run_once()
+      console.print(
+        f"[green]Watch pass complete:[/green] "
+        f"{stats.checks_performed} checked, "
+        f"{stats.listings_updated} updated, "
+        f"{stats.listings_completed} completed, "
+        f"{stats.errors} errors"
+      )
+    else:
+      console.print("[green]Starting continuous watch loop (Ctrl+C to stop)...[/green]")
+      stop_event = asyncio.Event()
+      try:
+        await watcher.run_forever(stop_event)
+      except KeyboardInterrupt:
+        stop_event.set()
+        console.print("\n[yellow]Watch loop stopped.[/yellow]")
+
+
+@main.command("queue")
+@pass_context
+def show_queue(app: AppContext) -> None:
+  """Show the current watch queue status."""
+  from auction_tracker.orchestrator.watcher import Watcher
+  from auction_tracker.transport.router import TransportRouter
+
+  watcher = Watcher(app.config, app.database, TransportRouter(app.config), app.repository)
+  with app.database.session() as session:
+    watcher.load_active_listings(session)
+
+  entries = watcher.get_queue_status()
+  table = Table(title=f"Watch Queue ({len(entries)} listings)")
+  table.add_column("ID", style="dim")
+  table.add_column("Website", style="cyan")
+  table.add_column("External ID", max_width=20)
+  table.add_column("Strategy", style="green")
+  table.add_column("Phase", style="yellow")
+  table.add_column("Next In", justify="right")
+  table.add_column("Failures", style="red", justify="right")
+
+  for entry in entries:
+    next_in = entry["next_check_in"]
+    if next_in > 86400:
+      time_str = f"{next_in / 86400:.1f}d"
+    elif next_in > 3600:
+      time_str = f"{next_in / 3600:.1f}h"
+    elif next_in > 60:
+      time_str = f"{next_in / 60:.0f}m"
+    else:
+      time_str = f"{next_in:.0f}s"
+
+    table.add_row(
+      str(entry["listing_id"]),
+      entry["website"],
+      entry["external_id"],
+      entry["strategy"],
+      entry["phase"],
+      time_str,
+      str(entry["consecutive_failures"]),
+    )
+
+  console.print(table)
+
+
+@main.command("fetch")
+@click.argument("url")
+@click.option("--website", type=str, required=True, help="Website name (e.g. ebay, catawiki).")
+@pass_context
+def fetch_listing(app: AppContext, url: str, website: str) -> None:
+  """Fetch and ingest a single listing by URL."""
+  asyncio.run(_fetch_async(app, url, website))
+
+
+async def _fetch_async(app: AppContext, url: str, website: str) -> None:
+  from auction_tracker.orchestrator.ingest import Ingest
+  from auction_tracker.parsing.base import ParserRegistry
+  from auction_tracker.transport.router import TransportRouter
+
+  if not ParserRegistry.has(website):
+    console.print(f"[red]No parser registered for '{website}'[/red]")
+    return
+
+  parser = ParserRegistry.get(website)
+
+  async with TransportRouter(app.config) as router:
+    result = await router.fetch(website, url)
+    scraped = parser.parse_listing(result.html)
+
+    with app.database.session() as session:
+      website_obj = app.repository.get_website_by_name(session, website)
+      if website_obj is None:
+        console.print(f"[red]Website '{website}' not in database. Run seed-websites first.[/red]")
+        return
+
+      ingest = Ingest(app.repository)
+      _listing, is_new = ingest.ingest_listing(session, website_obj.id, scraped)
+      session.commit()
+
+      action = "Created" if is_new else "Updated"
+      console.print(f"[green]{action} listing:[/green] {scraped.title}")
+      console.print(f"  Price: {scraped.current_price or '?'} {scraped.currency}")
+      console.print(f"  Status: {scraped.status or 'unknown'}")
+
+
+@main.command("search")
+@click.argument("query")
+@click.option("--website", type=str, multiple=True, help="Website(s) to search.")
+@click.option("--save", is_flag=True, default=False, help="Save the search query.")
+@click.option("--fetch/--no-fetch", default=False, help="Fetch full details for results.")
+@pass_context
+def search(
+  app: AppContext,
+  query: str,
+  website: tuple[str, ...],
+  save: bool,
+  fetch: bool,
+) -> None:
+  """Search for listings across websites."""
+  asyncio.run(_search_async(app, query, website, save, fetch))
+
+
+async def _search_async(
+  app: AppContext,
+  query: str,
+  websites: tuple[str, ...],
+  save: bool,
+  fetch: bool,
+) -> None:
+  from auction_tracker.orchestrator.ingest import Ingest
+  from auction_tracker.parsing.base import ParserRegistry
+  from auction_tracker.transport.router import TransportRouter
+
+  target_websites = list(websites) if websites else ParserRegistry.list_registered()
+
+  async with TransportRouter(app.config) as router:
+    ingest = Ingest(app.repository)
+
+    for website_name in target_websites:
+      if not ParserRegistry.has(website_name):
+        continue
+
+      parser = ParserRegistry.get(website_name)
+      if not parser.capabilities.can_search:
+        continue
+
+      website_config = app.config.website(website_name)
+      if not website_config.enabled:
+        continue
+
+      console.print(f"\n[cyan]Searching {website_name}...[/cyan]")
+
+      try:
+        search_url = parser.build_search_url(query)
+        result = await router.fetch(website_name, search_url)
+        search_results = parser.parse_search_results(result.html)
+
+        console.print(f"  Found {len(search_results)} results")
+
+        with app.database.session() as session:
+          website_obj = app.repository.get_website_by_name(session, website_name)
+          if website_obj is None:
+            continue
+
+          if save:
+            app.repository.upsert_search_query(
+              session,
+              website_id=website_obj.id,
+              name=f"{query} [{website_name}]",
+              query_text=query,
+            )
+
+          for scraped_result in search_results:
+            _listing, is_new = ingest.ingest_search_result(
+              session, website_obj.id, scraped_result,
+            )
+            marker = " [NEW]" if is_new else ""
+            price_str = f"{scraped_result.current_price} {scraped_result.currency}" if scraped_result.current_price else "?"
+            console.print(f"    {scraped_result.title[:60]} — {price_str}{marker}")
+
+          session.commit()
+
+      except Exception as error:
+        console.print(f"  [red]Error: {error}[/red]")
+        logger.error("Search error on %s: %s", website_name, error, exc_info=True)
+
+
+# -------------------------------------------------------------------
+# Utilities
+# -------------------------------------------------------------------
+
+
+def _yes_no(value: bool) -> str:
+  return "[green]yes[/green]" if value else "[dim]no[/dim]"
+
+
+if __name__ == "__main__":
+  main()

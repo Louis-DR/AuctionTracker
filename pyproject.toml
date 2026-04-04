@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "auction-tracker"
+version = "2.0.0"
+description = "Monitor auction and marketplace websites for fountain pen listings"
+requires-python = ">=3.11"
+dependencies = [
+  "click>=8.1",
+  "curl-cffi>=0.7",
+  "pydantic>=2.0",
+  "pydantic-settings>=2.0",
+  "sqlalchemy>=2.0",
+  "alembic>=1.13",
+  "rich>=13.0",
+  "pyyaml>=6.0",
+  "selectolax>=0.3",
+]
+
+[project.optional-dependencies]
+browser = [
+  "playwright>=1.40",
+]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  "ruff>=0.4",
+]
+all = [
+  "auction-tracker[browser,dev]",
+]
+
+[project.scripts]
+auction-tracker = "auction_tracker.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+  "integration: tests that hit real websites (deselect with -m 'not integration')",
+]
