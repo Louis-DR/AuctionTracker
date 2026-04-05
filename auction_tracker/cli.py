@@ -579,37 +579,45 @@ async def _run_pipeline_async(
     discovery = DiscoveryLoop(app.config, discovery_router, app.repository)
     watcher = Watcher(app.config, app.database, watcher_router, app.repository)
 
-    async def run_discovery_cycle() -> None:
-      """Run one full discovery cycle: search, fetch, classify, reload queue."""
+    # --- Helpers shared by once and continuous modes ---
+
+    async def run_searches() -> None:
+      """Run all saved searches and ingest result stubs into the DB."""
       console.print("\n[bold cyan]Discovery: searching for new listings...[/bold cyan]")
       with app.database.session() as session:
-        discovery_stats, _ = await discovery.run_all(session, website_filter=website)
+        stats, _ = await discovery.run_all(session, website_filter=website)
         console.print(
-          f"  Searches: {discovery_stats.searches_run} run, "
-          f"{discovery_stats.results_found} found, "
-          f"{discovery_stats.new_listings} new"
+          f"  Searches: {stats.searches_run} run, "
+          f"{stats.results_found} found, "
+          f"{stats.new_listings} new"
         )
+
+    async def fetch_one_batch() -> int:
+      """Fetch one batch of unfetched listings; return the count fetched."""
       with app.database.session() as session:
-        fetch_stats = await discovery.fetch_unfetched(
+        stats = await discovery.fetch_unfetched(
           session,
           website_filter=website,
           classify=classify,
           max_per_cycle=max_fetch_per_cycle,
         )
+      if stats.listings_fetched:
         console.print(
-          f"  Fetched: {fetch_stats.listings_fetched}, "
-          f"classified: {fetch_stats.listings_classified}, "
-          f"rejected: {fetch_stats.listings_rejected}"
+          f"  Fetched: {stats.listings_fetched}, "
+          f"classified: {stats.listings_classified}, "
+          f"rejected: {stats.listings_rejected}"
         )
-      # Reload the watcher queue so newly discovered listings are monitored.
+      # Reload watcher queue so freshly fetched listings enter monitoring.
       with app.database.session() as session:
         count = watcher.load_active_listings(session)
-        console.print(f"  Watch queue: {count} active listings")
+        if stats.listings_fetched:
+          console.print(f"  Watch queue: {count} active listings")
+      return stats.listings_fetched
 
-    # Always run one full discovery cycle at startup.
-    await run_discovery_cycle()
-
+    # --- once mode: sequential single pass ---
     if once:
+      await run_searches()
+      await fetch_one_batch()
       watch_stats = await watcher.run_once()
       console.print(
         f"\n[bold cyan]Watch:[/bold cyan] "
@@ -619,29 +627,45 @@ async def _run_pipeline_async(
       )
       return
 
-    # Continuous mode: watch loop + periodic re-discovery running concurrently.
+    # --- Continuous mode: three independent concurrent loops ---
+    #
+    # search_loop  — runs saved searches every --discover-interval minutes.
+    # fetch_loop   — continuously drains the unfetched queue in batches;
+    #                immediately loops again if there was more work so the
+    #                backlog cannot accumulate indefinitely.
+    # watcher      — monitors active listings on its own router/rate-limiter.
     stop_event = asyncio.Event()
 
-    async def periodic_discovery_loop() -> None:
-      interval_secs = discover_interval * 60
+    async def search_loop() -> None:
       while not stop_event.is_set():
-        # Sleep for the interval, waking early if stop is requested.
-        with contextlib.suppress(TimeoutError):
-          await asyncio.wait_for(stop_event.wait(), timeout=interval_secs)
-        if stop_event.is_set():
-          break
         try:
-          await run_discovery_cycle()
+          await run_searches()
         except Exception as exc:
-          logger.error("Periodic discovery error: %s", exc, exc_info=True)
+          logger.error("Search loop error: %s", exc, exc_info=True)
+        with contextlib.suppress(TimeoutError):
+          await asyncio.wait_for(stop_event.wait(), timeout=discover_interval * 60)
+
+    async def fetch_loop() -> None:
+      while not stop_event.is_set():
+        try:
+          fetched = await fetch_one_batch()
+        except Exception as exc:
+          logger.error("Fetch loop error: %s", exc, exc_info=True)
+          fetched = 0
+        if fetched == 0:
+          # Nothing pending right now — wait before checking again.
+          with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop_event.wait(), timeout=60.0)
+        # If the batch was full, immediately loop: more listings are waiting.
 
     console.print(
       f"\n[bold cyan]Continuous mode: "
-      f"watching listings + re-discovering every {discover_interval} min "
-      f"(Ctrl+C to stop)...[/bold cyan]"
+      f"searching every {discover_interval} min, fetching continuously, "
+      f"watching listings (Ctrl+C to stop)...[/bold cyan]"
     )
 
-    rediscovery_task = asyncio.create_task(periodic_discovery_loop())
+    search_task = asyncio.create_task(search_loop())
+    fetch_task = asyncio.create_task(fetch_loop())
     try:
       await watcher.run_forever(stop_event)
     except KeyboardInterrupt:
@@ -649,7 +673,7 @@ async def _run_pipeline_async(
     finally:
       stop_event.set()
       with contextlib.suppress(Exception):
-        await rediscovery_task
+        await asyncio.gather(search_task, fetch_task, return_exceptions=True)
       console.print("\n[yellow]Pipeline stopped.[/yellow]")
 
 
