@@ -1,0 +1,54 @@
+{
+  "page": {"totalElements": 245, "totalPages": 3, "number": 0, "size": 96},
+  "itemViewList": [
+    {
+      "itemView": {
+        "ref": "A1B2C3D4E5",
+        "title": "Montblanc Meisterstuck 149 Fountain Pen",
+        "currency": "USD",
+        "price": 850.0,
+        "url": "https://www.invaluable.com/auction-lot/montblanc-meisterstuck-149-fountain-pen-a1b2c3d4e5",
+        "eventDate": 1781596800000,
+        "isPassed": false,
+        "resultsPosted": false,
+        "buyItNow": false,
+        "photos": [
+          {
+            "_links": {
+              "medium": {"href": "https://image.invaluable.com/photos/lot149_medium.jpg"}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "itemView": {
+        "ref": "F6G7H8I9J0",
+        "title": "Parker Duofold Centennial 18K Gold Nib",
+        "currency": "EUR",
+        "price": 320.0,
+        "url": "",
+        "eventDate": 1780387200000,
+        "isPassed": false,
+        "resultsPosted": true,
+        "priceResult": 420.0,
+        "photos": [
+          {"mediumFileName": "parker_duofold_med.jpg"}
+        ]
+      }
+    },
+    {
+      "itemView": {
+        "ref": "K1L2M3N4O5",
+        "title": "Waterman Edson Sapphire Blue",
+        "currency": "GBP",
+        "price": 180.0,
+        "eventDate": 1780387200000,
+        "isPassed": true,
+        "resultsPosted": true,
+        "priceResult": 0,
+        "photos": []
+      }
+    }
+  ]
+}
