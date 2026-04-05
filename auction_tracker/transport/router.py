@@ -53,6 +53,7 @@ class TransportRouter:
     if self._browser is None:
       transport_config = self._config.transport
       self._browser = BrowserTransport(
+        headless=transport_config.browser_headless,
         max_pages=transport_config.browser_page_limit,
         timeout=transport_config.default_timeout,
       )

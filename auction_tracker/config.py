@@ -63,6 +63,12 @@ class TransportConfig(BaseModel):
   retry_backoff_factor: float = 2.0
   browser_page_limit: int = 3
   impersonation: str = "chrome"
+  # Run the browser in non-headless mode. Non-headless browsers have a
+  # fundamentally different fingerprint from headless ones and bypass
+  # sophisticated anti-bot systems (e.g. DataDome) that headless mode
+  # cannot evade even with stealth patches. The trade-off is that a
+  # visible browser window briefly appears during fetches.
+  browser_headless: bool = False
 
   @field_validator("default_request_delay", "default_timeout", mode="before")
   @classmethod
@@ -190,8 +196,14 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     monitoring_strategy=MonitoringStrategy.FULL,
   ),
   "leboncoin": WebsiteConfig(
-    transport=TransportKind.BROWSER,
+    # Try curl_cffi first (TLS fingerprint impersonation); fall back to
+    # a non-headless browser when HTTP fails (DataDome may tighten over
+    # time). The browser fallback requires browser_headless=False in
+    # TransportConfig (the default) to reliably bypass DataDome.
+    transport=TransportKind.HTTP,
+    fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
+    request_delay=3.0,
   ),
   "drouot": WebsiteConfig(
     transport=TransportKind.HTTP,
