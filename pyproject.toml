@@ -25,6 +25,7 @@ dependencies = [
 browser = [
   "playwright>=1.40",
   "playwright-stealth>=2.0",
+  "camoufox[geoip]>=0.4",
 ]
 dev = [
   "pytest>=8.0",

@@ -40,6 +40,7 @@ class TransportKind(enum.StrEnum):
   """Which transport to use for a website."""
   HTTP = "http"
   BROWSER = "browser"
+  CAMOUFOX = "camoufox"
 
 
 class DatabaseConfig(BaseModel):
@@ -205,11 +206,10 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     http_warm_up=True,
   ),
   "leboncoin": WebsiteConfig(
-    # DataDome blocks curl_cffi reliably, so use the visible browser
-    # directly (no HTTP-then-fallback). The non-headless browser with
-    # human-behavior simulation (mouse, scroll) is the only transport
-    # that works consistently against DataDome.
-    transport=TransportKind.BROWSER,
+    # DataDome blocks curl_cffi and Playwright Chromium reliably.
+    # Camoufox (Firefox fork with C++ fingerprint masking, humanize,
+    # and persistent profiles) is the only transport that works.
+    transport=TransportKind.CAMOUFOX,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
     request_delay=4.0,
   ),

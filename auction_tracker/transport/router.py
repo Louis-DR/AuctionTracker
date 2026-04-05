@@ -17,6 +17,7 @@ from auction_tracker.transport.base import (
   TransportError,
 )
 from auction_tracker.transport.browser import BrowserTransport
+from auction_tracker.transport.camoufox import CamoufoxTransport
 from auction_tracker.transport.http import HttpTransport
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class TransportRouter:
     self._config = config
     self._http: HttpTransport | None = None
     self._browser: BrowserTransport | None = None
+    self._camoufox: CamoufoxTransport | None = None
 
   async def start(self) -> None:
     transport_config = self._config.transport
@@ -60,6 +62,18 @@ class TransportRouter:
       await self._browser.start()
     return self._browser
 
+  async def _ensure_camoufox(self) -> CamoufoxTransport:
+    """Start the Camoufox transport on first use."""
+    if self._camoufox is None:
+      transport_config = self._config.transport
+      self._camoufox = CamoufoxTransport(
+        timeout=transport_config.default_timeout,
+        request_delay=transport_config.default_request_delay,
+        profile_directory=self._config.database.path.parent / "browser_profiles",
+      )
+      await self._camoufox.start()
+    return self._camoufox
+
   async def stop(self) -> None:
     if self._http is not None:
       await self._http.stop()
@@ -67,6 +81,9 @@ class TransportRouter:
     if self._browser is not None:
       await self._browser.stop()
       self._browser = None
+    if self._camoufox is not None:
+      await self._camoufox.stop()
+      self._camoufox = None
 
   async def __aenter__(self):
     await self.start()
@@ -84,9 +101,11 @@ class TransportRouter:
     raise ValueError(f"Unknown transport kind: {kind}")
 
   async def _get_transport_async(self, kind: TransportKind) -> Transport:
-    """Return the transport for kind, starting the browser lazily if needed."""
+    """Return the transport for kind, starting browser/camoufox lazily if needed."""
     if kind == TransportKind.BROWSER:
       return await self._ensure_browser()
+    if kind == TransportKind.CAMOUFOX:
+      return await self._ensure_camoufox()
     return self._get_transport(kind)
 
   async def fetch(self, website_name: str, url: str, **kwargs) -> FetchResult:
@@ -105,7 +124,7 @@ class TransportRouter:
     # configured to need it. Both browser and HTTP transports support the
     # warm_up kwarg; the HTTP version tracks already-warmed domains so
     # the cost is paid only once per process lifetime.
-    if website_config.transport == TransportKind.BROWSER or website_config.http_warm_up:
+    if website_config.transport in (TransportKind.BROWSER, TransportKind.CAMOUFOX) or website_config.http_warm_up:
       kwargs.setdefault("warm_up", True)
 
     try:
