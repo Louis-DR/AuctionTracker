@@ -1057,7 +1057,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       for event in error_events[:50]:
         detail = json.loads(event.detail_json) if event.detail_json else {}
         recent_errors.append({
-          "timestamp": event.timestamp.isoformat(),
+          "timestamp": event.timestamp,
           "website": event.website_name or "",
           "source": detail.get("source", ""),
           "message": detail.get("message", ""),
