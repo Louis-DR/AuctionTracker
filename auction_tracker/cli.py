@@ -7,6 +7,7 @@ database engine, and repository. Async commands use asyncio.run().
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from pathlib import Path
 
@@ -518,10 +519,29 @@ def add_search(app: AppContext, query: str, name: str | None) -> None:
 @click.option("--website", type=str, default=None, help="Only process this website.")
 @click.option("--no-classify", is_flag=True, default=False, help="Skip image classification.")
 @click.option("--once", is_flag=True, default=False, help="Single pass instead of continuous loop.")
+@click.option(
+  "--discover-interval",
+  type=int,
+  default=30,
+  show_default=True,
+  help="Minutes between re-discovery runs in continuous mode.",
+)
 @pass_context
-def run_pipeline(app: AppContext, website: str | None, no_classify: bool, once: bool) -> None:
-  """Run the full pipeline: discover, fetch, classify, and watch."""
-  asyncio.run(_run_pipeline_async(app, website, not no_classify, once))
+def run_pipeline(
+  app: AppContext,
+  website: str | None,
+  no_classify: bool,
+  once: bool,
+  discover_interval: int,
+) -> None:
+  """Run the full pipeline: discover, fetch, classify, and watch.
+
+  In continuous mode (default) the pipeline re-runs saved searches
+  every --discover-interval minutes so that new listings are found
+  throughout the day, while the watch loop monitors existing listings
+  concurrently.
+  """
+  asyncio.run(_run_pipeline_async(app, website, not no_classify, once, discover_interval))
 
 
 async def _run_pipeline_async(
@@ -529,6 +549,7 @@ async def _run_pipeline_async(
   website: str | None,
   classify: bool,
   once: bool,
+  discover_interval: int,
 ) -> None:
   from auction_tracker.orchestrator.discovery import DiscoveryLoop
   from auction_tracker.orchestrator.watcher import Watcher
@@ -538,49 +559,75 @@ async def _run_pipeline_async(
     discovery = DiscoveryLoop(app.config, router, app.repository)
     watcher = Watcher(app.config, app.database, router, app.repository)
 
-    # Step 1: Discover new listings.
-    console.print("\n[bold cyan]Step 1: Running saved searches...[/bold cyan]")
-    with app.database.session() as session:
-      discovery_stats, _new_listings = await discovery.run_all(session, website_filter=website)
-      console.print(
-        f"  {discovery_stats.searches_run} searches, "
-        f"{discovery_stats.results_found} results, "
-        f"{discovery_stats.new_listings} new"
-      )
+    async def run_discovery_cycle() -> None:
+      """Run one full discovery cycle: search, fetch, classify, reload queue."""
+      console.print("\n[bold cyan]Discovery: searching for new listings...[/bold cyan]")
+      with app.database.session() as session:
+        discovery_stats, _ = await discovery.run_all(session, website_filter=website)
+        console.print(
+          f"  Searches: {discovery_stats.searches_run} run, "
+          f"{discovery_stats.results_found} found, "
+          f"{discovery_stats.new_listings} new"
+        )
+      with app.database.session() as session:
+        fetch_stats = await discovery.fetch_unfetched(
+          session, website_filter=website, classify=classify,
+        )
+        console.print(
+          f"  Fetched: {fetch_stats.listings_fetched}, "
+          f"classified: {fetch_stats.listings_classified}, "
+          f"rejected: {fetch_stats.listings_rejected}"
+        )
+      # Reload the watcher queue so newly discovered listings are monitored.
+      with app.database.session() as session:
+        count = watcher.load_active_listings(session)
+        console.print(f"  Watch queue: {count} active listings")
 
-    # Step 2: Fetch full details + classify.
-    console.print("\n[bold cyan]Step 2: Fetching details and classifying...[/bold cyan]")
-    with app.database.session() as session:
-      fetch_stats = await discovery.fetch_unfetched(
-        session, website_filter=website, classify=classify,
-      )
-      console.print(
-        f"  {fetch_stats.listings_fetched} fetched, "
-        f"{fetch_stats.listings_classified} classified, "
-        f"{fetch_stats.listings_rejected} rejected"
-      )
-
-    # Step 3: Load active listings and watch.
-    console.print("\n[bold cyan]Step 3: Monitoring active listings...[/bold cyan]")
-    with app.database.session() as session:
-      count = watcher.load_active_listings(session)
-      console.print(f"  {count} listings in watch queue")
+    # Always run one full discovery cycle at startup.
+    await run_discovery_cycle()
 
     if once:
       watch_stats = await watcher.run_once()
       console.print(
-        f"  {watch_stats.checks_performed} checked, "
+        f"\n[bold cyan]Watch:[/bold cyan] "
+        f"{watch_stats.checks_performed} checked, "
         f"{watch_stats.listings_updated} updated, "
         f"{watch_stats.listings_completed} completed"
       )
-    else:
-      console.print("  Starting continuous monitoring (Ctrl+C to stop)...")
-      stop_event = asyncio.Event()
-      try:
-        await watcher.run_forever(stop_event)
-      except KeyboardInterrupt:
-        stop_event.set()
-        console.print("\n[yellow]Pipeline stopped.[/yellow]")
+      return
+
+    # Continuous mode: watch loop + periodic re-discovery running concurrently.
+    stop_event = asyncio.Event()
+
+    async def periodic_discovery_loop() -> None:
+      interval_secs = discover_interval * 60
+      while not stop_event.is_set():
+        # Sleep for the interval, waking early if stop is requested.
+        with contextlib.suppress(TimeoutError):
+          await asyncio.wait_for(stop_event.wait(), timeout=interval_secs)
+        if stop_event.is_set():
+          break
+        try:
+          await run_discovery_cycle()
+        except Exception as exc:
+          logger.error("Periodic discovery error: %s", exc, exc_info=True)
+
+    console.print(
+      f"\n[bold cyan]Continuous mode: "
+      f"watching listings + re-discovering every {discover_interval} min "
+      f"(Ctrl+C to stop)...[/bold cyan]"
+    )
+
+    rediscovery_task = asyncio.create_task(periodic_discovery_loop())
+    try:
+      await watcher.run_forever(stop_event)
+    except KeyboardInterrupt:
+      pass
+    finally:
+      stop_event.set()
+      with contextlib.suppress(Exception):
+        await rediscovery_task
+      console.print("\n[yellow]Pipeline stopped.[/yellow]")
 
 
 # -------------------------------------------------------------------
