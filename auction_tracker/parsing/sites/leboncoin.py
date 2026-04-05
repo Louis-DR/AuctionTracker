@@ -129,7 +129,7 @@ class LeBonCoinParser(Parser):
   # Search
   # ----------------------------------------------------------------
 
-  def parse_search_results(self, html: str) -> list[ScrapedSearchResult]:
+  def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
     _check_for_datadome(html)
 
     next_data = _extract_next_data(html)

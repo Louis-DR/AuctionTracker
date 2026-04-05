@@ -71,11 +71,12 @@ class LiveAuctioneersParser(Parser):
     )
 
   def build_search_url(self, query: str, **kwargs) -> str:
+    from urllib.parse import urlencode
     page = int(kwargs.get("page", 1))
-    params = f"keyword={query}"
+    params: dict = {"keyword": query}
     if page > 1:
-      params += f"&page={page}"
-    return f"{_BASE_URL}/search/?{params}"
+      params["page"] = page
+    return f"{_BASE_URL}/search/?{urlencode(params)}"
 
   def extract_external_id(self, url: str) -> str | None:
     match = re.search(r"/item/(\d+)", url)
@@ -85,7 +86,7 @@ class LiveAuctioneersParser(Parser):
   # Search
   # ----------------------------------------------------------------
 
-  def parse_search_results(self, html: str) -> list[ScrapedSearchResult]:
+  def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
     state = _extract_window_data(html)
     if state is None:
       raise ValueError(

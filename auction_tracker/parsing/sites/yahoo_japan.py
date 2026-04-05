@@ -106,7 +106,7 @@ class YahooJapanParser(Parser):
   # Search
   # ----------------------------------------------------------------
 
-  def parse_search_results(self, html: str) -> list[ScrapedSearchResult]:
+  def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
     results: list[ScrapedSearchResult] = []
     cards = html.split('class="itemCard">')
 

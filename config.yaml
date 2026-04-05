@@ -67,19 +67,21 @@ websites:
     # Browser transport auto-warms up the domain (homepage visit) and
     # uses playwright-stealth + DataDome challenge waiting.
   drouot:
+    enabled: true
     transport: http
     monitoring_strategy: post_auction
   catawiki:
+    enabled: true
     transport: http
     fallback_transport: browser
     monitoring_strategy: full
   gazette_drouot:
     enabled: false
   interencheres:
-    enabled: false
+    enabled: true
   invaluable:
-    enabled: false
+    enabled: true
   liveauctioneers:
-    enabled: false
+    enabled: true
   yahoo_japan:
-    enabled: false
+    enabled: true

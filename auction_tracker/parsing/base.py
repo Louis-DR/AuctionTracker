@@ -71,11 +71,13 @@ class Parser(abc.ABC):
     """What this parser can extract."""
 
   @abc.abstractmethod
-  def parse_search_results(self, html: str) -> list[ScrapedSearchResult]:
+  def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
     """Parse a search results page into a list of results.
 
-    Returns an empty list if no results are found (not an error).
-    Raises ValueError if the HTML structure is unrecognizable.
+    The optional ``url`` may be used by parsers that embed pagination
+    state in the URL. Returns an empty list if no results are found
+    (not an error). Raises ValueError if the HTML structure is
+    unrecognizable.
     """
 
   @abc.abstractmethod

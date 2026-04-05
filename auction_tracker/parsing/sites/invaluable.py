@@ -72,12 +72,11 @@ class InvaluableParser(Parser):
 
     Invaluable uses 0-based pages; we accept 1-based and convert.
     """
+    from urllib.parse import urlencode
     page = int(kwargs.get("page", 1))
     api_page = max(0, page - 1)
-    return (
-      f"{_BASE_URL}/api/search"
-      f"?keyword={query}&page={api_page}&size=96"
-    )
+    params = urlencode({"keyword": query, "page": api_page, "size": 96})
+    return f"{_BASE_URL}/api/search?{params}"
 
   def extract_external_id(self, url: str) -> str | None:
     match = re.search(r"/auction-lot/.*?-?([a-zA-Z0-9]+)$", url)
@@ -92,7 +91,7 @@ class InvaluableParser(Parser):
   # Search
   # ----------------------------------------------------------------
 
-  def parse_search_results(self, raw: str) -> list[ScrapedSearchResult]:
+  def parse_search_results(self, raw: str, url: str = "") -> list[ScrapedSearchResult]:
     """Parse search results from JSON API response."""
     try:
       data = json.loads(raw)

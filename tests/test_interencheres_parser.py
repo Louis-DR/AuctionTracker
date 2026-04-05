@@ -75,7 +75,7 @@ class TestUrlHelpers:
   def test_build_search_url(self, parser: InterencheresParser):
     url = parser.build_search_url("stylo plume")
     assert "recherche/lots" in url
-    assert "search=stylo plume" in url
+    assert "search=stylo+plume" in url
 
   def test_build_search_url_page_2(self, parser: InterencheresParser):
     url = parser.build_search_url("test", page=2)

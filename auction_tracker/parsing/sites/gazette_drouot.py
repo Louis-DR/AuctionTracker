@@ -102,7 +102,7 @@ class GazetteDrouotParser(Parser):
   # Search
   # ----------------------------------------------------------------
 
-  def parse_search_results(self, html: str) -> list[ScrapedSearchResult]:
+  def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
     tree = HTMLParser(html)
     results: list[ScrapedSearchResult] = []
 

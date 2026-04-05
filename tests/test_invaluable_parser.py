@@ -67,7 +67,7 @@ class TestRegistration:
 class TestUrlHelpers:
   def test_build_search_url_page_1(self, parser: InvaluableParser):
     url = parser.build_search_url("fountain pen")
-    assert "keyword=fountain pen" in url
+    assert "keyword=fountain+pen" in url
     assert "page=0" in url
 
   def test_build_search_url_page_3(self, parser: InvaluableParser):

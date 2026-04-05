@@ -61,7 +61,7 @@ class TestRegistration:
 class TestUrlHelpers:
   def test_build_search_url(self, parser: LiveAuctioneersParser):
     url = parser.build_search_url("fountain pen")
-    assert "keyword=fountain pen" in url
+    assert "keyword=fountain+pen" in url
     assert "search" in url
 
   def test_build_search_url_page_2(self, parser: LiveAuctioneersParser):

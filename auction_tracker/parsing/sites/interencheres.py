@@ -78,11 +78,12 @@ class InterencheresParser(Parser):
     )
 
   def build_search_url(self, query: str, **kwargs) -> str:
+    from urllib.parse import urlencode
     page = int(kwargs.get("page", 1))
-    params = f"search={query}"
+    params: dict = {"search": query}
     if page > 1:
-      params += f"&offset={(page - 1) * 30}"
-    return f"{_SEARCH_URL}?{params}"
+      params["offset"] = (page - 1) * 30
+    return f"{_SEARCH_URL}?{urlencode(params)}"
 
   def extract_external_id(self, url: str) -> str | None:
     match = re.search(r"/lot-(\d+)\.html", url)
@@ -92,7 +93,7 @@ class InterencheresParser(Parser):
   # Search
   # ----------------------------------------------------------------
 
-  def parse_search_results(self, html: str) -> list[ScrapedSearchResult]:
+  def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
     nuxt_data = _parse_nuxt_payload(html)
     if nuxt_data is None:
       raise ValueError(
