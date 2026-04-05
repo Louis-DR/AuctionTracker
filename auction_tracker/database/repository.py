@@ -16,6 +16,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from auction_tracker.database.models import (
+  BidEvent,
   Listing,
   ListingImage,
   ListingStatus,
@@ -230,6 +231,43 @@ class Repository:
     session.add(snapshot)
     session.flush()
     return snapshot
+
+  # -------------------------------------------------------------------
+  # Bid events
+  # -------------------------------------------------------------------
+
+  def sync_bid_events(
+    self,
+    session: Session,
+    listing_id: int,
+    bids: list[dict],
+  ) -> int:
+    """Synchronise bid events for a listing.
+
+    Each bid is identified by (listing_id, amount, bid_time) to avoid
+    duplicates on repeated fetches. Only new bids are inserted.
+    Returns the number of newly added bids.
+    """
+    existing = session.scalars(
+      select(BidEvent).where(BidEvent.listing_id == listing_id)
+    ).all()
+    existing_keys = {
+      (bid.amount, bid.bid_time) for bid in existing
+    }
+
+    added = 0
+    for bid_data in bids:
+      key = (bid_data["amount"], bid_data["bid_time"])
+      if key in existing_keys:
+        continue
+      session.add(BidEvent(listing_id=listing_id, **bid_data))
+      existing_keys.add(key)
+      added += 1
+
+    if added > 0:
+      session.flush()
+      logger.debug("Added %d new bid events for listing %d", added, listing_id)
+    return added
 
   # -------------------------------------------------------------------
   # Images

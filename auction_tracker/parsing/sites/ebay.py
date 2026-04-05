@@ -695,6 +695,10 @@ def _derive_status(
       return "sold"
     if qty_available is not None and qty_available == 0:
       return "sold"
+    # Multi-unit store listings (qty > 1) are bulk inventory pages, not
+    # individual collectible sales. Cancel them to avoid endless monitoring.
+    if qty_available is not None and qty_available > 1:
+      return "cancelled"
     return "active"
 
   if '"ENDED"' in script or '"ended"' in script:

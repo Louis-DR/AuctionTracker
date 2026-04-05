@@ -190,6 +190,23 @@ class Ingest:
         view_count=scraped.view_count,
       )
 
+    if scraped.bids:
+      bid_dicts = [
+        {
+          "amount": bid.amount,
+          "currency": bid.currency,
+          "bid_time": bid.bid_time,
+          "bidder_username": bid.bidder_username,
+          "bidder_country": bid.bidder_country,
+          "is_automatic": bid.is_automatic,
+        }
+        for bid in scraped.bids
+      ]
+      # Mark the highest bid as winning if the listing is sold.
+      if scraped.status == "sold" and bid_dicts:
+        bid_dicts[-1]["is_winning"] = True
+      self._repo.sync_bid_events(session, listing.id, bid_dicts)
+
     log_action = "Ingested new" if is_new else "Updated"
     logger.info(
       "%s listing: %s [%s] — %s %s",

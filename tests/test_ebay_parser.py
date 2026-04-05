@@ -194,7 +194,8 @@ class TestListingParsing:
     assert listing.external_id == "2222222222"
     assert listing.listing_type == "buy_now"
     assert listing.current_price == Decimal("280.00")
-    assert listing.status == "active"
+    # qty_available == 3 → multi-unit store listing, should be cancelled.
+    assert listing.status == "cancelled"
     assert listing.bid_count == 0
 
   def test_buy_now_attributes(self, parser: EbayParser):
@@ -356,8 +357,17 @@ class TestHelperFunctions:
   def test_derive_status_ended_unsold(self):
     assert _derive_status('"ENDED"', 0, None, "auction", None) == "unsold"
 
-  def test_derive_status_buy_now_active(self):
-    assert _derive_status("", 0, None, "buy_now", 3) == "active"
+  def test_derive_status_buy_now_active_single_unit(self):
+    assert _derive_status("", 0, None, "buy_now", 1) == "active"
+
+  def test_derive_status_buy_now_active_unknown_qty(self):
+    # qty_available == None means the page did not expose stock count; treat
+    # as a single listing and leave active.
+    assert _derive_status("", 0, None, "buy_now", None) == "active"
+
+  def test_derive_status_buy_now_multi_unit_cancelled(self):
+    assert _derive_status("", 0, None, "buy_now", 2) == "cancelled"
+    assert _derive_status("", 0, None, "buy_now", 50) == "cancelled"
 
   def test_derive_status_buy_now_sold_out(self):
     assert _derive_status("", 0, None, "buy_now", 0) == "sold"

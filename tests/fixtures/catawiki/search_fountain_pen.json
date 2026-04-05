@@ -1,0 +1,27 @@
+{
+  "lots": [
+    {
+      "id": 101149019,
+      "title": "Montblanc - 149 Meisterstuck Fountain Pen - 14K Gold Nib",
+      "url": "https://www.catawiki.com/en/l/101149019-montblanc-149-meisterstuck",
+      "originalImageUrl": "https://assets.catawiki.com/image/lot/101149019/original.jpg",
+      "thumbImageUrl": "https://assets.catawiki.com/image/lot/101149019/thumb.jpg",
+      "biddingStartTime": "2025-12-01T10:00:00Z"
+    },
+    {
+      "id": 101149020,
+      "title": "Pelikan - M800 Souveran Fountain Pen - 18K Gold Nib",
+      "url": "https://www.catawiki.com/en/l/101149020-pelikan-m800-souveran",
+      "originalImageUrl": "https://assets.catawiki.com/image/lot/101149020/original.jpg",
+      "biddingStartTime": "2025-12-01T10:00:00Z"
+    },
+    {
+      "id": 101149021,
+      "title": "Parker - Duofold Centennial - Fountain Pen",
+      "url": "https://www.catawiki.com/en/l/101149021-parker-duofold",
+      "thumbImageUrl": "https://assets.catawiki.com/image/lot/101149021/thumb.jpg",
+      "biddingStartTime": "2026-12-15T10:00:00Z"
+    }
+  ],
+  "total": 147
+}
