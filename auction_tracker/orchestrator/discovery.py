@@ -197,8 +197,14 @@ class DiscoveryLoop:
     session: Session,
     website_filter: str | None = None,
     classify: bool = True,
+    max_per_cycle: int = 50,
   ) -> DiscoveryStats:
     """Fetch full details for listings discovered via search.
+
+    At most ``max_per_cycle`` listings are fetched per call so that a
+    large backlog (e.g. after the first big search run) does not
+    monopolise the transport for several minutes at once. Any
+    remaining unfetched listings will be processed on the next cycle.
 
     Optionally runs image classification to filter out non-pen
     listings. Returns detailed stats.
@@ -211,9 +217,16 @@ class DiscoveryLoop:
     )
 
     stats = DiscoveryStats()
-    listings = self._repo.get_listings_needing_fetch(session, website_name=website_filter)
-    if not listings:
+    all_listings = self._repo.get_listings_needing_fetch(session, website_name=website_filter)
+    if not all_listings:
       return stats
+
+    if len(all_listings) > max_per_cycle:
+      logger.info(
+        "Capping fetch to %d of %d pending listings; remainder deferred to next cycle",
+        max_per_cycle, len(all_listings),
+      )
+    listings = all_listings[:max_per_cycle]
 
     for listing in listings:
       website_name = listing.website.name

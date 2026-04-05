@@ -34,7 +34,9 @@ class HttpTransport(Transport):
 
   Features:
   - TLS fingerprint impersonation (e.g. chrome, safari)
-  - Per-domain rate limiting via asyncio.Lock + delay
+  - Per-domain rate limiting: requests to different domains do not
+    block each other — only requests to the *same* domain are spaced
+    out by ``request_delay`` seconds.
   - Automatic retries with exponential backoff
   - Detection of blocked responses
   """
@@ -53,8 +55,10 @@ class HttpTransport(Transport):
     self._max_retries = max_retries
     self._retry_backoff_factor = retry_backoff_factor
     self._session: AsyncSession | None = None
-    self._rate_limit_lock = asyncio.Lock()
-    self._last_request_time: float = 0.0
+    # Per-domain state: each hostname gets its own lock and timestamp so
+    # that requests to different sites never block each other.
+    self._domain_locks: dict[str, asyncio.Lock] = {}
+    self._domain_last_request: dict[str, float] = {}
     self._warmed_up_domains: set[str] = set()
 
   @property
@@ -69,6 +73,13 @@ class HttpTransport(Transport):
       await self._session.close()
       self._session = None
 
+  def _domain_lock(self, domain: str) -> asyncio.Lock:
+    """Return (creating if necessary) the per-domain asyncio Lock."""
+    if domain not in self._domain_locks:
+      self._domain_locks[domain] = asyncio.Lock()
+      self._domain_last_request[domain] = 0.0
+    return self._domain_locks[domain]
+
   async def _warm_up_domain(self, url: str) -> None:
     """Visit the domain homepage once to establish session cookies.
 
@@ -82,32 +93,34 @@ class HttpTransport(Transport):
       return
     homepage = f"{parsed.scheme}://{domain}/"
     with contextlib.suppress(Exception):
-      await self._enforce_rate_limit()
+      await self._enforce_rate_limit(domain)
       await self._session.get(homepage, timeout=self._timeout, allow_redirects=True)
       logger.debug("HTTP warm-up complete for %s", domain)
     # Mark as warmed regardless of outcome so we don't retry infinitely.
     self._warmed_up_domains.add(domain)
 
-  async def _enforce_rate_limit(self) -> None:
-    """Wait until enough time has passed since the last request."""
-    async with self._rate_limit_lock:
+  async def _enforce_rate_limit(self, domain: str) -> None:
+    """Wait until enough time has passed since the last request to domain."""
+    lock = self._domain_lock(domain)
+    async with lock:
       now = time.monotonic()
-      elapsed = now - self._last_request_time
+      elapsed = now - self._domain_last_request[domain]
       if elapsed < self._request_delay:
         await asyncio.sleep(self._request_delay - elapsed)
-      self._last_request_time = time.monotonic()
+      self._domain_last_request[domain] = time.monotonic()
 
   async def fetch(self, url: str, **kwargs) -> FetchResult:
     if self._session is None:
       await self.start()
 
+    domain = urlparse(url).netloc
     if kwargs.pop("warm_up", False):
       await self._warm_up_domain(url)
 
     last_error: Exception | None = None
 
     for attempt in range(1, self._max_retries + 1):
-      await self._enforce_rate_limit()
+      await self._enforce_rate_limit(domain)
       start_time = time.monotonic()
 
       try:

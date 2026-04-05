@@ -128,6 +128,11 @@ class Watcher:
   async def run_once(self) -> WatchStats:
     """Process all listings that are currently due for a check.
 
+    Due listings are sorted by urgency before processing: IMMINENT
+    listings (ending within minutes) are checked before ENDING,
+    APPROACHING, and ROUTINE ones. Within the same phase, those with
+    the earliest end time go first.
+
     Returns statistics about what happened.
     """
     stats = WatchStats()
@@ -136,6 +141,19 @@ class Watcher:
 
     if not due_listings:
       return stats
+
+    # Higher number = lower urgency.
+    phase_priority = {
+      Phase.IMMINENT: 0,
+      Phase.ENDING: 1,
+      Phase.APPROACHING: 2,
+      Phase.ROUTINE: 3,
+      Phase.DONE: 4,
+    }
+    due_listings.sort(key=lambda tracked: (
+      phase_priority.get(tracked.phase, 99),
+      tracked.end_time if tracked.end_time is not None else float("inf"),
+    ))
 
     logger.info("Processing %d due listings", len(due_listings))
 

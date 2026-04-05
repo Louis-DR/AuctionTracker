@@ -526,6 +526,13 @@ def add_search(app: AppContext, query: str, name: str | None) -> None:
   show_default=True,
   help="Minutes between re-discovery runs in continuous mode.",
 )
+@click.option(
+  "--max-fetch-per-cycle",
+  type=int,
+  default=50,
+  show_default=True,
+  help="Max listings to fully fetch per discovery cycle (rest deferred to next cycle).",
+)
 @pass_context
 def run_pipeline(
   app: AppContext,
@@ -533,6 +540,7 @@ def run_pipeline(
   no_classify: bool,
   once: bool,
   discover_interval: int,
+  max_fetch_per_cycle: int,
 ) -> None:
   """Run the full pipeline: discover, fetch, classify, and watch.
 
@@ -541,7 +549,11 @@ def run_pipeline(
   throughout the day, while the watch loop monitors existing listings
   concurrently.
   """
-  asyncio.run(_run_pipeline_async(app, website, not no_classify, once, discover_interval))
+  asyncio.run(
+    _run_pipeline_async(
+      app, website, not no_classify, once, discover_interval, max_fetch_per_cycle,
+    )
+  )
 
 
 async def _run_pipeline_async(
@@ -550,14 +562,22 @@ async def _run_pipeline_async(
   classify: bool,
   once: bool,
   discover_interval: int,
+  max_fetch_per_cycle: int,
 ) -> None:
   from auction_tracker.orchestrator.discovery import DiscoveryLoop
   from auction_tracker.orchestrator.watcher import Watcher
   from auction_tracker.transport.router import TransportRouter
 
-  async with TransportRouter(app.config) as router:
-    discovery = DiscoveryLoop(app.config, router, app.repository)
-    watcher = Watcher(app.config, app.database, router, app.repository)
+  # Discovery and watcher use separate transport routers so their
+  # per-domain rate limiters are fully independent. Without this, a
+  # discovery fetch burst to eBay would delay the watcher's urgent
+  # eBay checks by the same rate-limit window.
+  async with (
+    TransportRouter(app.config) as discovery_router,
+    TransportRouter(app.config) as watcher_router,
+  ):
+    discovery = DiscoveryLoop(app.config, discovery_router, app.repository)
+    watcher = Watcher(app.config, app.database, watcher_router, app.repository)
 
     async def run_discovery_cycle() -> None:
       """Run one full discovery cycle: search, fetch, classify, reload queue."""
@@ -571,7 +591,10 @@ async def _run_pipeline_async(
         )
       with app.database.session() as session:
         fetch_stats = await discovery.fetch_unfetched(
-          session, website_filter=website, classify=classify,
+          session,
+          website_filter=website,
+          classify=classify,
+          max_per_cycle=max_fetch_per_cycle,
         )
         console.print(
           f"  Fetched: {fetch_stats.listings_fetched}, "
