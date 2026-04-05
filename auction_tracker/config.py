@@ -212,18 +212,22 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
   "interencheres": WebsiteConfig(
     transport=TransportKind.HTTP,
     monitoring_strategy=MonitoringStrategy.POST_AUCTION,
+    enabled=False,
   ),
   "liveauctioneers": WebsiteConfig(
     transport=TransportKind.HTTP,
     monitoring_strategy=MonitoringStrategy.POST_AUCTION,
+    enabled=False,
   ),
   "invaluable": WebsiteConfig(
     transport=TransportKind.HTTP,
     monitoring_strategy=MonitoringStrategy.POST_AUCTION,
+    enabled=False,
   ),
   "yahoo_japan": WebsiteConfig(
     transport=TransportKind.HTTP,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
+    enabled=False,
   ),
   "gazette_drouot": WebsiteConfig(
     transport=TransportKind.BROWSER,
@@ -264,6 +268,10 @@ def load_config(path: Path | None = None) -> AppConfig:
 
   If no path is given, looks for ``config.yaml`` in the current
   directory. If the file does not exist, returns default settings.
+
+  Website entries in the YAML are merged on top of the code defaults so
+  that sites not mentioned in the file still appear with their built-in
+  configuration.
   """
   import yaml
 
@@ -273,4 +281,21 @@ def load_config(path: Path | None = None) -> AppConfig:
     return AppConfig()
   with open(path) as handle:
     raw = yaml.safe_load(handle) or {}
+
+  # Deep-merge website overrides: start from code defaults and apply
+  # any YAML-level keys on top, so that newly-added sites are always
+  # visible even when config.yaml doesn't mention them.
+  yaml_websites: dict = raw.get("websites") or {}
+  merged: dict[str, dict] = {}
+  for name, default_cfg in _DEFAULT_WEBSITES.items():
+    base = default_cfg.model_dump()
+    if name in yaml_websites and yaml_websites[name]:
+      base.update(yaml_websites[name])
+    merged[name] = base
+  # Include any site that appears only in the YAML (custom additions).
+  for name, yaml_cfg in yaml_websites.items():
+    if name not in merged:
+      merged[name] = yaml_cfg or {}
+  raw["websites"] = merged
+
   return AppConfig.model_validate(raw)

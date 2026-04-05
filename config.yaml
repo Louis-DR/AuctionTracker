@@ -75,3 +75,11 @@ websites:
     monitoring_strategy: full
   gazette_drouot:
     enabled: false
+  interencheres:
+    enabled: false
+  invaluable:
+    enabled: false
+  liveauctioneers:
+    enabled: false
+  yahoo_japan:
+    enabled: false
