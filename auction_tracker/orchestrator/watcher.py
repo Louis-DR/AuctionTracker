@@ -72,12 +72,14 @@ class Watcher:
     router: TransportRouter,
     repository: Repository,
     metrics=None,
+    live=None,
   ) -> None:
     self._config = config
     self._database = database
     self._router = router
     self._repo = repository
     self._metrics = metrics
+    self._live = live
     self._ingest = Ingest(repository)
     self._scheduler = Scheduler(config.scheduler)
     self._queue = CheckQueue()
@@ -159,11 +161,18 @@ class Watcher:
 
     logger.info("Processing %d due listings", len(due_listings))
 
-    for tracked in due_listings:
+    if self._live:
+      self._live.watch_started(len(due_listings), self.queue_size + len(due_listings))
+
+    for check_index, tracked in enumerate(due_listings):
+      if self._live:
+        self._live.watch_progress(check_index, tracked.external_id, tracked.website_name)
       try:
         await self._check_listing(tracked, stats)
         if self._metrics:
           self._metrics.watch_check(tracked.website_name, tracked.external_id)
+        if self._live:
+          self._live.increment("watch_checks")
       except Exception as error:
         stats.errors += 1
         tracked.consecutive_failures += 1
@@ -174,6 +183,8 @@ class Watcher:
         )
         if self._metrics:
           self._metrics.error("watch", str(error), website_name=tracked.website_name)
+        if self._live:
+          self._live.increment("errors")
 
       # Reschedule (even after errors, with backoff).
       schedule = self._scheduler.compute_next_check(tracked)
@@ -183,8 +194,15 @@ class Watcher:
       if tracked.phase == Phase.DONE:
         self._queue.remove(tracked.listing_id)
         stats.listings_completed += 1
+        if self._live:
+          self._live.increment("watch_completed")
       else:
         self._queue.add_or_update(tracked)
+        if stats.listings_updated > 0 and self._live:
+          self._live.increment("watch_updated")
+
+    if self._live:
+      self._live.watch_idle(self.queue_size)
 
     logger.info(
       "Watch cycle: %d checked, %d updated, %d completed, %d errors",
@@ -316,12 +334,16 @@ class Watcher:
       next_time = self._queue.peek_next_time()
       if next_time is None:
         logger.info("No more listings to watch, waiting for new work")
+        if self._live:
+          self._live.watch_sleeping(self.queue_size, 60.0)
         with contextlib.suppress(TimeoutError):
           await asyncio.wait_for(stop_event.wait(), timeout=60.0)
         continue
 
       sleep_duration = max(0.0, min(next_time - time.time(), 60.0))
       if sleep_duration > 0:
+        if self._live:
+          self._live.watch_sleeping(self.queue_size, sleep_duration)
         with contextlib.suppress(TimeoutError):
           await asyncio.wait_for(stop_event.wait(), timeout=sleep_duration)
 

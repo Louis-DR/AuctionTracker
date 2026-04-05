@@ -61,10 +61,149 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Live status section */
+.live-section {
+  margin-bottom: 2rem;
+}
+.live-offline-banner {
+  background: var(--pico-del-color, #ff4136);
+  color: #fff;
+  text-align: center;
+  padding: 0.5rem;
+  border-radius: var(--pico-border-radius);
+  margin-bottom: 1rem;
+  font-weight: 600;
+}
+.live-loop-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  margin-bottom: 0.5rem;
+}
+.live-loop-label {
+  min-width: 5rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.live-loop-bar-container {
+  flex: 1;
+  background: var(--pico-muted-border-color, #e0e0e0);
+  border-radius: 6px;
+  height: 22px;
+  overflow: hidden;
+  position: relative;
+}
+.live-loop-bar {
+  height: 100%;
+  border-radius: 6px;
+  transition: width 0.6s ease-in-out;
+}
+.live-loop-bar.search { background: #0074d9; }
+.live-loop-bar.fetch { background: #2ecc40; }
+.live-loop-bar.watch { background: #ff851b; }
+.live-loop-bar.idle { background: var(--pico-muted-color, #999); width: 100%; opacity: 0.2; }
+.live-loop-bar.sleeping { background: var(--pico-muted-color, #999); width: 100%; opacity: 0.15; }
+.live-loop-text {
+  position: absolute;
+  top: 0;
+  left: 0.6rem;
+  right: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  font-size: 0.75rem;
+  color: #fff;
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.live-loop-text.dark-text {
+  color: var(--pico-color, #333);
+  text-shadow: none;
+}
+.live-counters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+.live-counter {
+  text-align: center;
+  padding: 0.3rem;
+  background: var(--pico-card-background-color, #fff);
+  border-radius: var(--pico-border-radius);
+  border: 1px solid var(--pico-muted-border-color, #e0e0e0);
+}
+.live-counter .cval {
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.live-counter .clabel {
+  font-size: 0.65rem;
+  opacity: 0.7;
+}
+.live-uptime {
+  font-size: 0.8rem;
+  opacity: 0.7;
+  margin-top: 0.4rem;
+}
 {% endblock %}
 
 {% block content %}
 <h1>Operations</h1>
+
+<!-- Live status (updated via JS polling) -->
+<section class="live-section" id="live-section" style="display: none;">
+  <h2 style="margin-bottom: 0.5rem;">
+    <span class="status-indicator status-running" id="live-pulse"></span>
+    Ongoing Tasks
+  </h2>
+  <div id="live-offline-banner" class="live-offline-banner" style="display: none;">
+    Pipeline offline
+  </div>
+
+  <div id="live-loops">
+    <div class="live-loop-row">
+      <span class="live-loop-label">Search</span>
+      <div class="live-loop-bar-container">
+        <div class="live-loop-bar search" id="live-bar-search" style="width: 0%;"></div>
+        <span class="live-loop-text" id="live-text-search">idle</span>
+      </div>
+    </div>
+    <div class="live-loop-row">
+      <span class="live-loop-label">Fetch</span>
+      <div class="live-loop-bar-container">
+        <div class="live-loop-bar fetch" id="live-bar-fetch" style="width: 0%;"></div>
+        <span class="live-loop-text" id="live-text-fetch">idle</span>
+      </div>
+    </div>
+    <div class="live-loop-row">
+      <span class="live-loop-label">Watch</span>
+      <div class="live-loop-bar-container">
+        <div class="live-loop-bar watch" id="live-bar-watch" style="width: 0%;"></div>
+        <span class="live-loop-text" id="live-text-watch">idle</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="live-counters" id="live-counters">
+    <div class="live-counter"><span class="cval" id="lc-searches">0</span><div class="clabel">Searches</div></div>
+    <div class="live-counter"><span class="cval" id="lc-results">0</span><div class="clabel">Results</div></div>
+    <div class="live-counter"><span class="cval" id="lc-new">0</span><div class="clabel">New</div></div>
+    <div class="live-counter"><span class="cval" id="lc-fetched">0</span><div class="clabel">Fetched</div></div>
+    <div class="live-counter"><span class="cval" id="lc-classified">0</span><div class="clabel">Classified</div></div>
+    <div class="live-counter"><span class="cval" id="lc-rejected">0</span><div class="clabel">Rejected</div></div>
+    <div class="live-counter"><span class="cval" id="lc-watch-checks">0</span><div class="clabel">Watch checks</div></div>
+    <div class="live-counter"><span class="cval" id="lc-completed">0</span><div class="clabel">Completed</div></div>
+    <div class="live-counter"><span class="cval" id="lc-errors" style="color: #ff4136;">0</span><div class="clabel">Errors</div></div>
+  </div>
+
+  <div class="live-uptime" id="live-uptime"></div>
+</section>
 
 <!-- Time range filter -->
 <div class="time-filter">
@@ -407,5 +546,134 @@ function updateCountdowns() {
 }
 updateCountdowns();
 setInterval(updateCountdowns, 30000);
+
+// ---------------------------------------------------------------
+// Live status polling (~1 Hz)
+// ---------------------------------------------------------------
+
+const liveSection = document.getElementById('live-section');
+const offlineBanner = document.getElementById('live-offline-banner');
+
+function formatUptime(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  const parts = [];
+  if (hours > 0) parts.push(hours + 'h');
+  if (minutes > 0) parts.push(minutes + 'm');
+  parts.push(secs + 's');
+  return parts.join(' ');
+}
+
+function renderLoopBar(loopKey, loopData, cssClass) {
+  const bar = document.getElementById('live-bar-' + loopKey);
+  const text = document.getElementById('live-text-' + loopKey);
+  if (!loopData || !bar || !text) return;
+
+  const state = loopData.state || 'idle';
+
+  bar.className = 'live-loop-bar ' + cssClass;
+  text.className = 'live-loop-text';
+
+  if (state === 'running') {
+    let percent = 0;
+    let label = '';
+    if (loopKey === 'search') {
+      const qTotal = loopData.query_total || 1;
+      const wTotal = loopData.website_total || 1;
+      const overallStep = (loopData.query_index || 0) * wTotal + (loopData.website_index || 0);
+      const overallTotal = qTotal * wTotal;
+      percent = Math.round((overallStep / overallTotal) * 100);
+      label = "'" + (loopData.query_text || '?') + "' on " +
+              (loopData.website_name || '?') +
+              ' (' + ((loopData.query_index || 0) + 1) + '/' + qTotal + ' queries, ' +
+              ((loopData.website_index || 0) + 1) + '/' + wTotal + ' sites)';
+    } else if (loopKey === 'fetch') {
+      const bTotal = loopData.batch_total || 1;
+      percent = Math.round(((loopData.batch_index || 0) / bTotal) * 100);
+      label = (loopData.current_listing || '?') + ' on ' +
+              (loopData.current_website || '?') +
+              ' (' + ((loopData.batch_index || 0) + 1) + '/' + bTotal + ')';
+    } else if (loopKey === 'watch') {
+      const cTotal = loopData.check_total || 1;
+      percent = Math.round(((loopData.check_index || 0) / cTotal) * 100);
+      label = (loopData.current_listing || '?') + ' on ' +
+              (loopData.current_website || '?') +
+              ' (' + ((loopData.check_index || 0) + 1) + '/' + cTotal + ' due' +
+              (loopData.queue_size ? ', ' + loopData.queue_size + ' queued' : '') + ')';
+    }
+    bar.style.width = Math.max(percent, 3) + '%';
+    text.textContent = label;
+  } else if (state === 'sleeping') {
+    bar.className = 'live-loop-bar sleeping';
+    bar.style.width = '100%';
+    text.className = 'live-loop-text dark-text';
+    if (loopData.resume_in_seconds) {
+      const minutes = Math.round(loopData.resume_in_seconds / 60);
+      text.textContent = 'sleeping (' + (minutes > 0 ? minutes + 'm' : '<1m') + ')';
+    } else if (loopData.next_check_in) {
+      text.textContent = 'sleeping (' + loopData.next_check_in + 's)' +
+                         (loopData.queue_size ? ' \u2022 ' + loopData.queue_size + ' queued' : '');
+    } else {
+      text.textContent = 'sleeping';
+    }
+  } else {
+    bar.className = 'live-loop-bar idle';
+    bar.style.width = '100%';
+    text.className = 'live-loop-text dark-text';
+    if (loopKey === 'watch' && loopData.queue_size) {
+      text.textContent = 'idle \u2022 ' + loopData.queue_size + ' queued';
+    } else {
+      text.textContent = 'idle';
+    }
+  }
+}
+
+let liveWasVisible = false;
+
+async function fetchLiveData() {
+  try {
+    const response = await fetch('/api/operations/live');
+    const data = await response.json();
+
+    if (!data.running) {
+      if (liveWasVisible) {
+        offlineBanner.style.display = 'block';
+        document.getElementById('live-pulse').className = 'status-indicator status-stopped';
+      }
+      return;
+    }
+
+    liveSection.style.display = 'block';
+    offlineBanner.style.display = 'none';
+    document.getElementById('live-pulse').className = 'status-indicator status-running';
+    liveWasVisible = true;
+
+    renderLoopBar('search', data.search_loop, 'search');
+    renderLoopBar('fetch', data.fetch_loop, 'fetch');
+    renderLoopBar('watch', data.watch_loop, 'watch');
+
+    const counters = data.counters || {};
+    document.getElementById('lc-searches').textContent = counters.searches_run || 0;
+    document.getElementById('lc-results').textContent = counters.search_results_found || 0;
+    document.getElementById('lc-new').textContent = counters.new_listings || 0;
+    document.getElementById('lc-fetched').textContent = counters.fetched || 0;
+    document.getElementById('lc-classified').textContent = counters.classified || 0;
+    document.getElementById('lc-rejected').textContent = counters.rejected || 0;
+    document.getElementById('lc-watch-checks').textContent = counters.watch_checks || 0;
+    document.getElementById('lc-completed').textContent = counters.watch_completed || 0;
+    document.getElementById('lc-errors').textContent = counters.errors || 0;
+
+    if (data.uptime_seconds) {
+      document.getElementById('live-uptime').textContent =
+        'Pipeline uptime: ' + formatUptime(data.uptime_seconds);
+    }
+  } catch (error) {
+    // Ignore network errors silently.
+  }
+}
+
+fetchLiveData();
+setInterval(fetchLiveData, 1000);
 </script>
 {% endblock %}

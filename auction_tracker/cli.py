@@ -565,12 +565,16 @@ async def _run_pipeline_async(
   max_fetch_per_cycle: int,
 ) -> None:
   from auction_tracker.orchestrator.discovery import DiscoveryLoop
-  from auction_tracker.orchestrator.metrics import MetricsCollector
+  from auction_tracker.orchestrator.metrics import LiveStatus, MetricsCollector
   from auction_tracker.orchestrator.watcher import Watcher
   from auction_tracker.transport.router import TransportRouter
 
   metrics = MetricsCollector(app.database)
   metrics.pipeline_started()
+
+  status_path = app.config.database.path.parent / "pipeline_status.json"
+  live = LiveStatus(status_path)
+  live.start()
 
   # Discovery and watcher use separate transport routers so their
   # per-domain rate limiters are fully independent. Without this, a
@@ -580,8 +584,14 @@ async def _run_pipeline_async(
     TransportRouter(app.config) as discovery_router,
     TransportRouter(app.config) as watcher_router,
   ):
-    discovery = DiscoveryLoop(app.config, discovery_router, app.repository, metrics=metrics)
-    watcher = Watcher(app.config, app.database, watcher_router, app.repository, metrics=metrics)
+    discovery = DiscoveryLoop(
+      app.config, discovery_router, app.repository,
+      metrics=metrics, live=live,
+    )
+    watcher = Watcher(
+      app.config, app.database, watcher_router, app.repository,
+      metrics=metrics, live=live,
+    )
 
     # --- Helpers shared by once and continuous modes ---
 
@@ -646,6 +656,7 @@ async def _run_pipeline_async(
           await run_searches()
         except Exception as exc:
           logger.error("Search loop error: %s", exc, exc_info=True)
+        live.search_sleeping(discover_interval * 60)
         with contextlib.suppress(TimeoutError):
           await asyncio.wait_for(stop_event.wait(), timeout=discover_interval * 60)
 
@@ -657,10 +668,9 @@ async def _run_pipeline_async(
           logger.error("Fetch loop error: %s", exc, exc_info=True)
           fetched = 0
         if fetched == 0:
-          # Nothing pending right now — wait before checking again.
+          live.fetch_sleeping()
           with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop_event.wait(), timeout=60.0)
-        # If the batch was full, immediately loop: more listings are waiting.
 
     console.print(
       f"\n[bold cyan]Continuous mode: "
@@ -678,6 +688,7 @@ async def _run_pipeline_async(
       stop_event.set()
       with contextlib.suppress(Exception):
         await asyncio.gather(search_task, fetch_task, return_exceptions=True)
+      live.stop()
       metrics.pipeline_stopped()
       console.print("\n[yellow]Pipeline stopped.[/yellow]")
 

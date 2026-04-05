@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import time
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -1094,6 +1095,31 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       timeseries_data=timeseries_data,
       recent_errors=recent_errors,
     )
+
+  # ------------------------------------------------------------------
+  # Routes — Live status API
+  # ------------------------------------------------------------------
+
+  status_file_path = config.database.path.parent / "pipeline_status.json"
+
+  @app.route("/api/operations/live")
+  def operations_live():
+    """Return the live pipeline status as JSON.
+
+    The ``run`` command writes this file at ~1 Hz.  If the file is
+    missing or older than 10 seconds, the pipeline is considered
+    offline.
+    """
+    try:
+      if not status_file_path.exists():
+        return {"running": False}
+      stat = status_file_path.stat()
+      if time.time() - stat.st_mtime > 10:
+        return {"running": False, "stale": True}
+      raw = status_file_path.read_text(encoding="utf-8")
+      return json.loads(raw)
+    except Exception:
+      return {"running": False}
 
   # ------------------------------------------------------------------
   # Routes — Images

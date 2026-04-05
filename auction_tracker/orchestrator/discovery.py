@@ -53,12 +53,14 @@ class DiscoveryLoop:
     router: TransportRouter,
     repository: Repository,
     metrics=None,
+    live=None,
   ) -> None:
     self._config = config
     self._router = router
     self._repo = repository
     self._ingest = Ingest(repository)
     self._metrics = metrics
+    self._live = live
 
   async def run_all(
     self,
@@ -94,9 +96,17 @@ class DiscoveryLoop:
       logger.info("No searchable websites available")
       return stats, all_new_listings
 
-    for search_query in searches:
+    if self._live:
+      self._live.search_started(len(searches), len(target_websites))
+
+    for query_index, search_query in enumerate(searches):
       total_results = 0
-      for website in target_websites:
+      for website_index, website in enumerate(target_websites):
+        if self._live:
+          self._live.search_progress(
+            query_index, search_query.query_text,
+            website_index, website.name,
+          )
         try:
           new_listings, result_count = await self._run_search_on_website(
             session, search_query, website.name, stats,
@@ -109,6 +119,10 @@ class DiscoveryLoop:
               website.name, search_query.query_text,
               result_count, len(new_listings),
             )
+          if self._live:
+            self._live.increment("searches_run")
+            self._live.increment("search_results_found", result_count)
+            self._live.increment("new_listings", len(new_listings))
         except Exception as error:
           stats.errors += 1
           session.rollback()
@@ -119,12 +133,16 @@ class DiscoveryLoop:
           )
           if self._metrics:
             self._metrics.error("search", str(error), website_name=website.name)
+          if self._live:
+            self._live.increment("errors")
 
       from datetime import datetime
       search_query.last_run_at = datetime.utcnow()
       search_query.result_count = total_results
       session.commit()
 
+    if self._live:
+      self._live.search_idle()
     logger.info(
       "Discovery complete: %d searches, %d results, %d new listings, %d errors",
       stats.searches_run, stats.results_found, stats.new_listings, stats.errors,
@@ -237,7 +255,10 @@ class DiscoveryLoop:
       )
     listings = all_listings[:max_per_cycle]
 
-    for listing in listings:
+    if self._live:
+      self._live.fetch_started(len(listings))
+
+    for batch_index, listing in enumerate(listings):
       website_name = listing.website.name
       if not ParserRegistry.has(website_name):
         continue
@@ -245,6 +266,9 @@ class DiscoveryLoop:
       parser = ParserRegistry.get(website_name)
       if not parser.capabilities.can_parse_listing:
         continue
+
+      if self._live:
+        self._live.fetch_progress(batch_index, listing.external_id, website_name)
 
       try:
         _result, scraped = await fetch_and_parse_listing(
@@ -254,6 +278,8 @@ class DiscoveryLoop:
         stats.listings_fetched += 1
         if self._metrics:
           self._metrics.fetch_listing(website_name, listing.external_id)
+        if self._live:
+          self._live.increment("fetched")
 
         # Run classification if enabled and images are available.
         if classify and scraped.image_urls:
@@ -271,8 +297,12 @@ class DiscoveryLoop:
               self._metrics.classification(
                 website_name, listing.external_id, is_relevant, score,
               )
+            if self._live:
+              self._live.increment("classified")
             if not is_relevant:
               stats.listings_rejected += 1
+              if self._live:
+                self._live.increment("rejected")
               from auction_tracker.database.models import ListingStatus
               self._repo.mark_listing_status(
                 session, listing.id, ListingStatus.CANCELLED,
@@ -294,6 +324,11 @@ class DiscoveryLoop:
         )
         if self._metrics:
           self._metrics.error("fetch", str(exc), website_name=website_name)
+        if self._live:
+          self._live.increment("errors")
+
+    if self._live:
+      self._live.fetch_idle()
 
     logger.info(
       "Fetch complete: %d fetched, %d classified, %d rejected, %d errors",
