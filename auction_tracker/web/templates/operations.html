@@ -217,10 +217,10 @@
 </div>
 
 <!-- Pipeline status -->
-<div class="grid">
+<div class="grid" id="ops-metric-cards">
   <article class="metric-card">
     <p class="stat-label">Pipeline Status</p>
-    <p class="stat-number">
+    <p class="stat-number" id="ops-pipeline-status">
       {% if pipeline_running %}
       <span class="status-indicator status-running"></span> Running
       {% elif pipeline_last_activity %}
@@ -229,27 +229,29 @@
       <span class="status-indicator status-unknown"></span> No data
       {% endif %}
     </p>
-    {% if pipeline_last_activity %}
-    <small class="muted">Last activity: {{ pipeline_last_activity|format_datetime }}</small>
-    {% endif %}
+    <small class="muted" id="ops-pipeline-last-activity">
+      {% if pipeline_last_activity %}Last activity: {{ pipeline_last_activity|format_datetime }}{% endif %}
+    </small>
   </article>
   <article class="metric-card">
     <p class="stat-label">Pending Fetches</p>
-    <p class="stat-number" {% if pending_fetches > 50 %}style="color: #ff851b;"{% endif %}>
+    <p class="stat-number" id="ops-pending-fetches"
+       {% if pending_fetches > 50 %}style="color: #ff851b;"{% endif %}>
       {{ pending_fetches }}
     </p>
     <small class="muted">Unfetched listings in DB</small>
   </article>
   <article class="metric-card">
-    <p class="stat-label">Errors ({{ hours_back }}h)</p>
-    <p class="stat-number" {% if error_count > 0 %}style="color: #ff4136;"{% endif %}>
+    <p class="stat-label">Errors (<span id="ops-hours-label">{{ hours_back }}</span>h)</p>
+    <p class="stat-number" id="ops-error-count"
+       {% if error_count > 0 %}style="color: #ff4136;"{% endif %}>
       {{ error_count }}
     </p>
   </article>
   <article class="metric-card">
     <p class="stat-label">Watch Cycles</p>
-    <p class="stat-number">{{ watch_cycle_count }}</p>
-    <small class="muted">{{ total_watch_checks }} checks total</small>
+    <p class="stat-number" id="ops-watch-cycles">{{ watch_cycle_count }}</p>
+    <small class="muted"><span id="ops-total-checks">{{ total_watch_checks }}</span> checks total</small>
   </article>
 </div>
 
@@ -257,41 +259,44 @@
 <div class="grid">
   <article>
     <header><strong>Search Loop</strong></header>
-    {% if search_stats %}
-    <table>
-      <thead>
-        <tr><th>Website</th><th class="text-right">Runs</th><th class="text-right">Found</th><th class="text-right">New</th></tr>
-      </thead>
-      <tbody>
-        {% for website, stats in search_stats|dictsort %}
-        <tr>
-          <td>{{ website }}</td>
-          <td class="text-right">{{ stats.runs }}</td>
-          <td class="text-right">{{ stats.results }}</td>
-          <td class="text-right">{{ stats.new }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="muted">No search events in the last {{ hours_back }}h.</p>
-    {% endif %}
+    <div id="ops-search-loop-wrap">
+      {% if search_stats %}
+      <table>
+        <thead>
+          <tr><th>Website</th><th class="text-right">Runs</th><th class="text-right">Found</th><th class="text-right">New</th></tr>
+        </thead>
+        <tbody id="ops-search-tbody">
+          {% for website, stats in search_stats|dictsort %}
+          <tr>
+            <td>{{ website }}</td>
+            <td class="text-right">{{ stats.runs }}</td>
+            <td class="text-right">{{ stats.results }}</td>
+            <td class="text-right">{{ stats.new }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted" id="ops-search-empty">No search events in the last {{ hours_back }}h.</p>
+      {% endif %}
+    </div>
   </article>
 
   <article>
     <header><strong>Fetch Loop</strong></header>
     <table>
       <tbody>
-        <tr><td>Batches</td><td class="text-right">{{ fetch_batch_count }}</td></tr>
-        <tr><td>Listings fetched</td><td class="text-right">{{ total_fetched }}</td></tr>
-        <tr><td>Classified</td><td class="text-right">{{ total_classified }}</td></tr>
+        <tr><td>Batches</td><td class="text-right" id="ops-fetch-batches">{{ fetch_batch_count }}</td></tr>
+        <tr><td>Listings fetched</td><td class="text-right" id="ops-total-fetched">{{ total_fetched }}</td></tr>
+        <tr><td>Classified</td><td class="text-right" id="ops-total-classified">{{ total_classified }}</td></tr>
         <tr>
           <td>Rejected by classifier</td>
-          <td class="text-right" {% if total_rejected > 0 %}style="color: #ff851b;"{% endif %}>
+          <td class="text-right" id="ops-total-rejected"
+              {% if total_rejected > 0 %}style="color: #ff851b;"{% endif %}>
             {{ total_rejected }}
           </td>
         </tr>
-        <tr><td>Pending</td><td class="text-right">{{ pending_fetches }}</td></tr>
+        <tr><td>Pending</td><td class="text-right" id="ops-fetch-pending">{{ pending_fetches }}</td></tr>
       </tbody>
     </table>
   </article>
@@ -300,18 +305,18 @@
     <header><strong>Watch Loop</strong></header>
     <table>
       <tbody>
-        <tr><td>Cycles</td><td class="text-right">{{ watch_cycle_count }}</td></tr>
-        <tr><td>Checks performed</td><td class="text-right">{{ total_watch_checks }}</td></tr>
-        <tr><td>Updated</td><td class="text-right">{{ total_watch_updated }}</td></tr>
-        <tr><td>Completed (terminal)</td><td class="text-right">{{ total_watch_completed }}</td></tr>
-        <tr><td>Extensions detected</td><td class="text-right">{{ total_watch_extensions }}</td></tr>
+        <tr><td>Cycles</td><td class="text-right" id="ops-watch-cycle-count">{{ watch_cycle_count }}</td></tr>
+        <tr><td>Checks performed</td><td class="text-right" id="ops-watch-checks">{{ total_watch_checks }}</td></tr>
+        <tr><td>Updated</td><td class="text-right" id="ops-watch-updated">{{ total_watch_updated }}</td></tr>
+        <tr><td>Completed (terminal)</td><td class="text-right" id="ops-watch-completed">{{ total_watch_completed }}</td></tr>
+        <tr><td>Extensions detected</td><td class="text-right" id="ops-watch-extensions">{{ total_watch_extensions }}</td></tr>
       </tbody>
     </table>
   </article>
 </div>
 
 <!-- Requests per website chart -->
-<h2>Requests per Website ({{ hours_back }}h)</h2>
+<h2>Requests per Website (<span class="ops-hours-label-text">{{ hours_back }}</span>h)</h2>
 <div class="chart-container">
   <canvas id="requestsChart" height="200"></canvas>
 </div>
@@ -328,53 +333,54 @@
 
 <!-- Upcoming auctions (ending soonest) -->
 <h2>Upcoming Auctions (Ending Soon)</h2>
-{% if upcoming_auctions %}
-<div style="overflow-x: auto;">
-  <table>
-    <thead>
-      <tr>
-        <th>Title</th>
-        <th class="text-right">Price</th>
-        <th class="text-right">Bids</th>
-        <th>Website</th>
-        <th>Ends</th>
-        <th>Time Left</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for listing in upcoming_auctions %}
-      {% set seconds_left = (listing.end_time|string|replace(' ', 'T') + 'Z')|default(0) %}
-      <tr class="clickable-row" onclick="location.href='/listings/{{ listing.id }}'">
-        <td>{{ listing.title[:60] }}{% if listing.title|length > 60 %}&hellip;{% endif %}</td>
-        <td class="text-right no-wrap">
-          {% if listing.current_price is not none %}
-            {{ listing.current_price|format_price(listing.currency) }}
-          {% else %}
-            &ndash;
-          {% endif %}
-        </td>
-        <td class="text-right">{{ listing.bid_count }}</td>
-        <td>{{ listing.website.name if listing.website else "?" }}</td>
-        <td class="no-wrap">{{ listing.end_time|format_datetime }}</td>
-        <td class="no-wrap" data-end-time="{{ listing.end_time.isoformat() }}Z">
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div id="ops-upcoming-wrap">
+  {% if upcoming_auctions %}
+  <div style="overflow-x: auto;">
+    <table>
+      <thead>
+        <tr>
+          <th>Title</th>
+          <th class="text-right">Price</th>
+          <th class="text-right">Bids</th>
+          <th>Website</th>
+          <th>Ends</th>
+          <th>Time Left</th>
+        </tr>
+      </thead>
+      <tbody id="ops-upcoming-tbody">
+        {% for listing in upcoming_auctions %}
+        <tr class="clickable-row" onclick="location.href='/listings/{{ listing.id }}'">
+          <td>{{ listing.title[:60] }}{% if listing.title|length > 60 %}&hellip;{% endif %}</td>
+          <td class="text-right no-wrap">
+            {% if listing.current_price is not none %}
+              {{ listing.current_price|format_price(listing.currency) }}
+            {% else %}
+              &ndash;
+            {% endif %}
+          </td>
+          <td class="text-right">{{ listing.bid_count }}</td>
+          <td>{{ listing.website_name }}</td>
+          <td class="no-wrap">{{ listing.end_time_display }}</td>
+          <td class="no-wrap" data-end-time="{{ listing.end_time_iso }}"></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted" id="ops-upcoming-empty">No active auctions with a known end time.</p>
+  {% endif %}
 </div>
-{% else %}
-<p class="muted">No active auctions with a known end time.</p>
-{% endif %}
 
 <!-- Error breakdown -->
+<div id="ops-errors-section">
 {% if error_count > 0 %}
 <h2>Errors</h2>
 <div class="grid">
   <article>
     <header><strong>By Source</strong></header>
     <table>
-      <tbody>
+      <tbody id="ops-error-source-tbody">
         {% for source, count in error_by_source|dictsort(by='value', reverse=true) %}
         <tr><td>{{ source }}</td><td class="text-right">{{ count }}</td></tr>
         {% endfor %}
@@ -384,7 +390,7 @@
   <article>
     <header><strong>By Website</strong></header>
     <table>
-      <tbody>
+      <tbody id="ops-error-website-tbody">
         {% for website, count in error_by_website|dictsort(by='value', reverse=true) %}
         <tr><td>{{ website }}</td><td class="text-right">{{ count }}</td></tr>
         {% endfor %}
@@ -399,7 +405,7 @@
     <thead>
       <tr><th>Time</th><th>Source</th><th>Website</th><th>Message</th></tr>
     </thead>
-    <tbody>
+    <tbody id="ops-recent-errors-tbody">
       {% for error in recent_errors %}
       <tr class="error-row">
         <td class="no-wrap">{{ error.timestamp|format_datetime }}</td>
@@ -412,147 +418,33 @@
   </table>
 </div>
 {% endif %}
+</div>
 
 {% endblock %}
 
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>
-// Requests per website bar chart.
-const websiteData = {{ website_request_counts|tojson_safe }};
-const websiteLabels = Object.keys(websiteData).sort();
-const websiteCounts = websiteLabels.map(label => websiteData[label]);
-
-const websiteColors = [
+// ---------------------------------------------------------------
+// Constants & helpers
+// ---------------------------------------------------------------
+const HOURS_BACK = {{ hours_back }};
+const WEBSITE_COLORS = [
   '#0074d9', '#2ecc40', '#ff4136', '#ff851b', '#b10dc9',
   '#7c3aed', '#f59e0b', '#06b6d4', '#aaa', '#333',
 ];
 
-new Chart(document.getElementById('requestsChart'), {
-  type: 'bar',
-  data: {
-    labels: websiteLabels,
-    datasets: [{
-      label: 'Requests',
-      data: websiteCounts,
-      backgroundColor: websiteLabels.map((_, index) => websiteColors[index % websiteColors.length]),
-      borderRadius: 4,
-    }],
-  },
-  options: {
-    responsive: true,
-    plugins: { legend: { display: false } },
-    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
-  },
-});
-
-// Activity over time line chart.
-const timeseriesData = {{ timeseries_data|tojson_safe }};
-const shortLabels = timeseriesData.labels.map(label => {
-  const parts = label.split(' ');
-  return parts[1] || label;
-});
-
-new Chart(document.getElementById('activityChart'), {
-  type: 'line',
-  data: {
-    labels: shortLabels,
-    datasets: [
-      {
-        label: 'New Listings',
-        data: timeseriesData.new_listings,
-        borderColor: '#2ecc40',
-        backgroundColor: 'rgba(46, 204, 64, 0.1)',
-        fill: true,
-        tension: 0.3,
-      },
-      {
-        label: 'Completed',
-        data: timeseriesData.completed,
-        borderColor: '#0074d9',
-        backgroundColor: 'rgba(0, 116, 217, 0.1)',
-        fill: true,
-        tension: 0.3,
-      },
-      {
-        label: 'Requests',
-        data: timeseriesData.requests,
-        borderColor: '#aaa',
-        backgroundColor: 'rgba(170, 170, 170, 0.08)',
-        fill: true,
-        tension: 0.3,
-        borderDash: [4, 4],
-      },
-    ],
-  },
-  options: {
-    responsive: true,
-    interaction: { intersect: false, mode: 'index' },
-    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
-    plugins: { legend: { position: 'top' } },
-  },
-});
-
-// Errors over time.
-new Chart(document.getElementById('errorsChart'), {
-  type: 'bar',
-  data: {
-    labels: shortLabels,
-    datasets: [{
-      label: 'Errors',
-      data: timeseriesData.errors,
-      backgroundColor: 'rgba(255, 65, 54, 0.6)',
-      borderColor: '#ff4136',
-      borderWidth: 1,
-      borderRadius: 2,
-    }],
-  },
-  options: {
-    responsive: true,
-    plugins: { legend: { display: false } },
-    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
-  },
-});
-
-// Live countdown for "time left" cells.
-function updateCountdowns() {
-  document.querySelectorAll('[data-end-time]').forEach(cell => {
-    const endTime = new Date(cell.dataset.endTime);
-    const now = new Date();
-    const diffMs = endTime - now;
-    if (diffMs <= 0) {
-      cell.textContent = 'Ended';
-      cell.className = 'no-wrap muted';
-      return;
-    }
-    const totalMinutes = Math.floor(diffMs / 60000);
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-
-    if (hours > 0) {
-      cell.textContent = hours + 'h ' + minutes + 'm';
-    } else {
-      cell.textContent = minutes + 'm';
-    }
-
-    if (totalMinutes < 30) {
-      cell.className = 'no-wrap ending-soon';
-    } else if (totalMinutes < 120) {
-      cell.className = 'no-wrap ending-moderate';
-    } else {
-      cell.className = 'no-wrap';
-    }
-  });
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
 }
-updateCountdowns();
-setInterval(updateCountdowns, 30000);
 
-// ---------------------------------------------------------------
-// Live status polling (~1 Hz)
-// ---------------------------------------------------------------
-
-const liveSection = document.getElementById('live-section');
-const offlineBanner = document.getElementById('live-offline-banner');
+function formatPrice(price, currency) {
+  if (price == null) return '\u2013';
+  return new Intl.NumberFormat('fr-FR', {
+    style: 'currency', currency: currency || 'EUR', maximumFractionDigits: 0,
+  }).format(price);
+}
 
 function formatUptime(seconds) {
   const hours = Math.floor(seconds / 3600);
@@ -565,40 +457,350 @@ function formatUptime(seconds) {
   return parts.join(' ');
 }
 
+function timeLeft(isoString) {
+  if (!isoString) return { text: '', cls: 'no-wrap' };
+  const end = new Date(isoString);
+  const diffMs = end - Date.now();
+  if (diffMs <= 0) return { text: 'Ended', cls: 'no-wrap muted' };
+  const totalMinutes = Math.floor(diffMs / 60000);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  const text = h > 0 ? (h + 'h ' + m + 'm') : (m + 'm');
+  const cls = totalMinutes < 30 ? 'no-wrap ending-soon'
+            : totalMinutes < 120 ? 'no-wrap ending-moderate'
+            : 'no-wrap';
+  return { text, cls };
+}
+
+// ---------------------------------------------------------------
+// Chart instances (created once, updated in-place)
+// ---------------------------------------------------------------
+const websiteColors = {};  // label -> stable color
+
+function getWebsiteColor(label) {
+  if (!websiteColors[label]) {
+    const keys = Object.keys(websiteColors);
+    websiteColors[label] = WEBSITE_COLORS[keys.length % WEBSITE_COLORS.length];
+  }
+  return websiteColors[label];
+}
+
+const initialWebsiteData = {{ website_request_counts|tojson_safe }};
+const initialTimeseries = {{ timeseries_data|tojson_safe }};
+const initialShortLabels = initialTimeseries.labels.map(l => l.split(' ')[1] || l);
+
+const requestsChart = new Chart(document.getElementById('requestsChart'), {
+  type: 'bar',
+  data: {
+    labels: Object.keys(initialWebsiteData).sort(),
+    datasets: [{
+      label: 'Requests',
+      data: Object.keys(initialWebsiteData).sort().map(k => initialWebsiteData[k]),
+      backgroundColor: Object.keys(initialWebsiteData).sort().map(k => getWebsiteColor(k)),
+      borderRadius: 4,
+    }],
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+  },
+});
+
+const activityChart = new Chart(document.getElementById('activityChart'), {
+  type: 'line',
+  data: {
+    labels: initialShortLabels,
+    datasets: [
+      {
+        label: 'New Listings',
+        data: initialTimeseries.new_listings,
+        borderColor: '#2ecc40',
+        backgroundColor: 'rgba(46, 204, 64, 0.1)',
+        fill: true, tension: 0.3,
+      },
+      {
+        label: 'Completed',
+        data: initialTimeseries.completed,
+        borderColor: '#0074d9',
+        backgroundColor: 'rgba(0, 116, 217, 0.1)',
+        fill: true, tension: 0.3,
+      },
+      {
+        label: 'Requests',
+        data: initialTimeseries.requests,
+        borderColor: '#aaa',
+        backgroundColor: 'rgba(170, 170, 170, 0.08)',
+        fill: true, tension: 0.3, borderDash: [4, 4],
+      },
+    ],
+  },
+  options: {
+    responsive: true,
+    interaction: { intersect: false, mode: 'index' },
+    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+    plugins: { legend: { position: 'top' } },
+  },
+});
+
+const errorsChart = new Chart(document.getElementById('errorsChart'), {
+  type: 'bar',
+  data: {
+    labels: initialShortLabels,
+    datasets: [{
+      label: 'Errors',
+      data: initialTimeseries.errors,
+      backgroundColor: 'rgba(255, 65, 54, 0.6)',
+      borderColor: '#ff4136',
+      borderWidth: 1, borderRadius: 2,
+    }],
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+  },
+});
+
+function updateCharts(data) {
+  // Requests per website
+  const wData = data.website_request_counts || {};
+  const wLabels = Object.keys(wData).sort();
+  requestsChart.data.labels = wLabels;
+  requestsChart.data.datasets[0].data = wLabels.map(k => wData[k]);
+  requestsChart.data.datasets[0].backgroundColor = wLabels.map(k => getWebsiteColor(k));
+  requestsChart.update('none');
+
+  // Activity over time
+  const ts = data.timeseries_data || {};
+  const shortLabels = (ts.labels || []).map(l => l.split(' ')[1] || l);
+  activityChart.data.labels = shortLabels;
+  activityChart.data.datasets[0].data = ts.new_listings || [];
+  activityChart.data.datasets[1].data = ts.completed || [];
+  activityChart.data.datasets[2].data = ts.requests || [];
+  activityChart.update('none');
+
+  // Errors
+  errorsChart.data.labels = shortLabels;
+  errorsChart.data.datasets[0].data = ts.errors || [];
+  errorsChart.update('none');
+}
+
+// ---------------------------------------------------------------
+// Countdown ticks (every second)
+// ---------------------------------------------------------------
+function updateCountdowns() {
+  document.querySelectorAll('[data-end-time]').forEach(cell => {
+    const { text, cls } = timeLeft(cell.dataset.endTime);
+    cell.textContent = text;
+    cell.className = cls;
+  });
+}
+updateCountdowns();
+setInterval(updateCountdowns, 1000);
+
+// ---------------------------------------------------------------
+// Stats polling (every 5s) — updates all static sections
+// ---------------------------------------------------------------
+function renderSortedPairs(tbodyId, obj, reverse) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  const pairs = Object.entries(obj || {}).sort((a, b) =>
+    reverse ? b[1] - a[1] : a[0].localeCompare(b[0])
+  );
+  tbody.innerHTML = pairs.map(([k, v]) =>
+    `<tr><td>${k}</td><td class="text-right">${v}</td></tr>`
+  ).join('');
+}
+
+function renderUpcoming(auctions) {
+  const wrap = document.getElementById('ops-upcoming-wrap');
+  if (!wrap) return;
+  if (!auctions || auctions.length === 0) {
+    wrap.innerHTML = '<p class="muted">No active auctions with a known end time.</p>';
+    return;
+  }
+  const rows = auctions.map(a => {
+    const { text: tlText, cls: tlCls } = timeLeft(a.end_time_iso);
+    const title = a.title.length > 60 ? a.title.slice(0, 60) + '\u2026' : a.title;
+    const price = formatPrice(a.current_price, a.currency);
+    return `<tr class="clickable-row" onclick="location.href='/listings/${a.id}'">
+      <td>${title}</td>
+      <td class="text-right no-wrap">${price}</td>
+      <td class="text-right">${a.bid_count}</td>
+      <td>${a.website_name}</td>
+      <td class="no-wrap">${a.end_time_display}</td>
+      <td class="${tlCls}" data-end-time="${a.end_time_iso || ''}">${tlText}</td>
+    </tr>`;
+  }).join('');
+  wrap.innerHTML = `<div style="overflow-x: auto;"><table>
+    <thead><tr>
+      <th>Title</th><th class="text-right">Price</th>
+      <th class="text-right">Bids</th><th>Website</th>
+      <th>Ends</th><th>Time Left</th>
+    </tr></thead>
+    <tbody id="ops-upcoming-tbody">${rows}</tbody>
+  </table></div>`;
+}
+
+function renderSearchTable(searchStats) {
+  const wrap = document.getElementById('ops-search-loop-wrap');
+  if (!wrap) return;
+  const entries = Object.entries(searchStats || {});
+  if (entries.length === 0) {
+    wrap.innerHTML = `<p class="muted">No search events in the last ${HOURS_BACK}h.</p>`;
+    return;
+  }
+  entries.sort((a, b) => a[0].localeCompare(b[0]));
+  const rows = entries.map(([website, stats]) =>
+    `<tr><td>${website}</td><td class="text-right">${stats.runs}</td>` +
+    `<td class="text-right">${stats.results}</td><td class="text-right">${stats.new}</td></tr>`
+  ).join('');
+  wrap.innerHTML = `<table><thead>
+    <tr><th>Website</th><th class="text-right">Runs</th>
+    <th class="text-right">Found</th><th class="text-right">New</th></tr>
+  </thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderErrorsSection(data) {
+  const section = document.getElementById('ops-errors-section');
+  if (!section) return;
+  if ((data.error_count || 0) === 0) {
+    section.innerHTML = '';
+    return;
+  }
+  const sourceRows = Object.entries(data.error_by_source || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `<tr><td>${k}</td><td class="text-right">${v}</td></tr>`)
+    .join('');
+  const websiteRows = Object.entries(data.error_by_website || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `<tr><td>${k}</td><td class="text-right">${v}</td></tr>`)
+    .join('');
+  const recentRows = (data.recent_errors || []).map(e => {
+    const ts = e.timestamp ? new Date(e.timestamp).toLocaleString('fr-FR') : '';
+    const msg = (e.message || '').slice(0, 80);
+    return `<tr class="error-row">
+      <td class="no-wrap">${ts}</td><td>${e.source}</td>
+      <td>${e.website}</td>
+      <td class="error-message" title="${e.message}">${msg}</td>
+    </tr>`;
+  }).join('');
+  section.innerHTML = `<h2>Errors</h2>
+  <div class="grid">
+    <article><header><strong>By Source</strong></header>
+      <table><tbody id="ops-error-source-tbody">${sourceRows}</tbody></table>
+    </article>
+    <article><header><strong>By Website</strong></header>
+      <table><tbody id="ops-error-website-tbody">${websiteRows}</tbody></table>
+    </article>
+  </div>
+  <h3>Recent Errors</h3>
+  <div style="overflow-x:auto"><table>
+    <thead><tr><th>Time</th><th>Source</th><th>Website</th><th>Message</th></tr></thead>
+    <tbody id="ops-recent-errors-tbody">${recentRows}</tbody>
+  </table></div>`;
+}
+
+async function fetchStatsData() {
+  try {
+    const response = await fetch('/api/operations/stats?hours=' + HOURS_BACK);
+    const data = await response.json();
+
+    // --- Metric cards ---
+    const statusEl = document.getElementById('ops-pipeline-status');
+    if (statusEl) {
+      if (data.pipeline_running) {
+        statusEl.innerHTML = '<span class="status-indicator status-running"></span> Running';
+      } else if (data.pipeline_last_activity) {
+        statusEl.innerHTML = '<span class="status-indicator status-stopped"></span> Stopped';
+      } else {
+        statusEl.innerHTML = '<span class="status-indicator status-unknown"></span> No data';
+      }
+    }
+
+    const pendingEl = document.getElementById('ops-pending-fetches');
+    if (pendingEl) {
+      pendingEl.textContent = data.pending_fetches || 0;
+      pendingEl.style.color = (data.pending_fetches || 0) > 50 ? '#ff851b' : '';
+    }
+    const errorEl = document.getElementById('ops-error-count');
+    if (errorEl) {
+      errorEl.textContent = data.error_count || 0;
+      errorEl.style.color = (data.error_count || 0) > 0 ? '#ff4136' : '';
+    }
+    setText('ops-watch-cycles', data.watch_cycle_count || 0);
+    setText('ops-total-checks', data.total_watch_checks || 0);
+
+    // --- Fetch loop table ---
+    setText('ops-fetch-batches', data.fetch_batch_count || 0);
+    setText('ops-total-fetched', data.total_fetched || 0);
+    setText('ops-total-classified', data.total_classified || 0);
+    const rejEl = document.getElementById('ops-total-rejected');
+    if (rejEl) {
+      rejEl.textContent = data.total_rejected || 0;
+      rejEl.style.color = (data.total_rejected || 0) > 0 ? '#ff851b' : '';
+    }
+    setText('ops-fetch-pending', data.pending_fetches || 0);
+
+    // --- Watch loop table ---
+    setText('ops-watch-cycle-count', data.watch_cycle_count || 0);
+    setText('ops-watch-checks', data.total_watch_checks || 0);
+    setText('ops-watch-updated', data.total_watch_updated || 0);
+    setText('ops-watch-completed', data.total_watch_completed || 0);
+    setText('ops-watch-extensions', data.total_watch_extensions || 0);
+
+    // --- Search loop table ---
+    renderSearchTable(data.search_stats);
+
+    // --- Charts ---
+    updateCharts(data);
+
+    // --- Upcoming auctions ---
+    renderUpcoming(data.upcoming_auctions);
+
+    // --- Errors section ---
+    renderErrorsSection(data);
+
+  } catch (error) {
+    // Ignore fetch errors silently.
+  }
+}
+
+fetchStatsData();
+setInterval(fetchStatsData, 5000);
+
+// ---------------------------------------------------------------
+// Live loop status polling (~1 Hz)
+// ---------------------------------------------------------------
+const liveSection = document.getElementById('live-section');
+const offlineBanner = document.getElementById('live-offline-banner');
+
 function renderLoopBar(loopKey, loopData, cssClass) {
   const bar = document.getElementById('live-bar-' + loopKey);
   const text = document.getElementById('live-text-' + loopKey);
   if (!loopData || !bar || !text) return;
-
   const state = loopData.state || 'idle';
-
   bar.className = 'live-loop-bar ' + cssClass;
   text.className = 'live-loop-text';
-
   if (state === 'running') {
-    let percent = 0;
-    let label = '';
+    let percent = 0, label = '';
     if (loopKey === 'search') {
-      const qTotal = loopData.query_total || 1;
-      const wTotal = loopData.website_total || 1;
-      const overallStep = (loopData.query_index || 0) * wTotal + (loopData.website_index || 0);
-      const overallTotal = qTotal * wTotal;
-      percent = Math.round((overallStep / overallTotal) * 100);
-      label = "'" + (loopData.query_text || '?') + "' on " +
-              (loopData.website_name || '?') +
+      const qTotal = loopData.query_total || 1, wTotal = loopData.website_total || 1;
+      const step = (loopData.query_index || 0) * wTotal + (loopData.website_index || 0);
+      percent = Math.round((step / (qTotal * wTotal)) * 100);
+      label = "'" + (loopData.query_text || '?') + "' on " + (loopData.website_name || '?') +
               ' (' + ((loopData.query_index || 0) + 1) + '/' + qTotal + ' queries, ' +
               ((loopData.website_index || 0) + 1) + '/' + wTotal + ' sites)';
     } else if (loopKey === 'fetch') {
       const bTotal = loopData.batch_total || 1;
       percent = Math.round(((loopData.batch_index || 0) / bTotal) * 100);
-      label = (loopData.current_listing || '?') + ' on ' +
-              (loopData.current_website || '?') +
+      label = (loopData.current_listing || '?') + ' on ' + (loopData.current_website || '?') +
               ' (' + ((loopData.batch_index || 0) + 1) + '/' + bTotal + ')';
     } else if (loopKey === 'watch') {
       const cTotal = loopData.check_total || 1;
       percent = Math.round(((loopData.check_index || 0) / cTotal) * 100);
-      label = (loopData.current_listing || '?') + ' on ' +
-              (loopData.current_website || '?') +
+      label = (loopData.current_listing || '?') + ' on ' + (loopData.current_website || '?') +
               ' (' + ((loopData.check_index || 0) + 1) + '/' + cTotal + ' due' +
               (loopData.queue_size ? ', ' + loopData.queue_size + ' queued' : '') + ')';
     }
@@ -609,11 +811,11 @@ function renderLoopBar(loopKey, loopData, cssClass) {
     bar.style.width = '100%';
     text.className = 'live-loop-text dark-text';
     if (loopData.resume_in_seconds) {
-      const minutes = Math.round(loopData.resume_in_seconds / 60);
-      text.textContent = 'sleeping (' + (minutes > 0 ? minutes + 'm' : '<1m') + ')';
+      const m = Math.round(loopData.resume_in_seconds / 60);
+      text.textContent = 'sleeping (' + (m > 0 ? m + 'm' : '<1m') + ')';
     } else if (loopData.next_check_in) {
       text.textContent = 'sleeping (' + loopData.next_check_in + 's)' +
-                         (loopData.queue_size ? ' \u2022 ' + loopData.queue_size + ' queued' : '');
+        (loopData.queue_size ? ' \u2022 ' + loopData.queue_size + ' queued' : '');
     } else {
       text.textContent = 'sleeping';
     }
@@ -621,11 +823,8 @@ function renderLoopBar(loopKey, loopData, cssClass) {
     bar.className = 'live-loop-bar idle';
     bar.style.width = '100%';
     text.className = 'live-loop-text dark-text';
-    if (loopKey === 'watch' && loopData.queue_size) {
-      text.textContent = 'idle \u2022 ' + loopData.queue_size + ' queued';
-    } else {
-      text.textContent = 'idle';
-    }
+    text.textContent = (loopKey === 'watch' && loopData.queue_size)
+      ? 'idle \u2022 ' + loopData.queue_size + ' queued' : 'idle';
   }
 }
 
@@ -635,7 +834,6 @@ async function fetchLiveData() {
   try {
     const response = await fetch('/api/operations/live');
     const data = await response.json();
-
     if (!data.running) {
       if (liveWasVisible) {
         offlineBanner.style.display = 'block';
@@ -643,34 +841,27 @@ async function fetchLiveData() {
       }
       return;
     }
-
     liveSection.style.display = 'block';
     offlineBanner.style.display = 'none';
     document.getElementById('live-pulse').className = 'status-indicator status-running';
     liveWasVisible = true;
-
     renderLoopBar('search', data.search_loop, 'search');
     renderLoopBar('fetch', data.fetch_loop, 'fetch');
     renderLoopBar('watch', data.watch_loop, 'watch');
-
     const counters = data.counters || {};
-    document.getElementById('lc-searches').textContent = counters.searches_run || 0;
-    document.getElementById('lc-results').textContent = counters.search_results_found || 0;
-    document.getElementById('lc-new').textContent = counters.new_listings || 0;
-    document.getElementById('lc-fetched').textContent = counters.fetched || 0;
-    document.getElementById('lc-classified').textContent = counters.classified || 0;
-    document.getElementById('lc-rejected').textContent = counters.rejected || 0;
-    document.getElementById('lc-watch-checks').textContent = counters.watch_checks || 0;
-    document.getElementById('lc-completed').textContent = counters.watch_completed || 0;
-    document.getElementById('lc-errors').textContent = counters.errors || 0;
-
+    setText('lc-searches', counters.searches_run || 0);
+    setText('lc-results', counters.search_results_found || 0);
+    setText('lc-new', counters.new_listings || 0);
+    setText('lc-fetched', counters.fetched || 0);
+    setText('lc-classified', counters.classified || 0);
+    setText('lc-rejected', counters.rejected || 0);
+    setText('lc-watch-checks', counters.watch_checks || 0);
+    setText('lc-completed', counters.watch_completed || 0);
+    setText('lc-errors', counters.errors || 0);
     if (data.uptime_seconds) {
-      document.getElementById('live-uptime').textContent =
-        'Pipeline uptime: ' + formatUptime(data.uptime_seconds);
+      setText('live-uptime', 'Pipeline uptime: ' + formatUptime(data.uptime_seconds));
     }
-  } catch (error) {
-    // Ignore network errors silently.
-  }
+  } catch (e) {}
 }
 
 fetchLiveData();

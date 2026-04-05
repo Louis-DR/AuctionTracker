@@ -888,15 +888,17 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
   # Routes — Operations dashboard
   # ------------------------------------------------------------------
 
-  @app.route("/operations")
-  def operations():
+  def _collect_operations_data(hours_back: int) -> dict:
+    """Query the database and return all data needed for the operations page.
+
+    Extracted into a helper so the HTML route and the JSON API route
+    can share the same logic without duplication.
+    """
     now = datetime.now(UTC)
-    hours_back = request.args.get("hours", 24, type=int)
     since = now - timedelta(hours=hours_back)
     since_naive = since.replace(tzinfo=None)
 
     with database.session() as session:
-      # Pipeline running status: last start vs last stop.
       last_start = session.execute(
         select(PipelineEvent.timestamp)
         .where(PipelineEvent.event_type == "pipeline_start")
@@ -917,19 +919,16 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         select(func.max(PipelineEvent.timestamp))
       ).scalar()
 
-      # All events in the time window.
       events_in_window = session.execute(
         select(PipelineEvent)
         .where(PipelineEvent.timestamp >= since_naive)
         .order_by(desc(PipelineEvent.timestamp))
       ).scalars().all()
 
-      # Aggregate event counts by type.
       event_type_counts: dict[str, int] = {}
       for event in events_in_window:
         event_type_counts[event.event_type] = event_type_counts.get(event.event_type, 0) + 1
 
-      # Per-website request counts (search_run + fetch_listing + watch_check).
       request_types = {"search_run", "fetch_listing", "watch_check"}
       website_request_counts: dict[str, int] = {}
       for event in events_in_window:
@@ -938,7 +937,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
             website_request_counts.get(event.website_name, 0) + 1
           )
 
-      # Error breakdown.
       error_events = [event for event in events_in_window if event.event_type == "error"]
       error_by_source: dict[str, int] = {}
       error_by_website: dict[str, int] = {}
@@ -951,7 +949,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
             error_by_website.get(event.website_name, 0) + 1
           )
 
-      # Search stats per website (new listings discovered).
       search_events = [event for event in events_in_window if event.event_type == "search_run"]
       search_stats: dict[str, dict] = {}
       for event in search_events:
@@ -963,7 +960,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         search_stats[website]["results"] += detail.get("results_found", 0)
         search_stats[website]["new"] += detail.get("new_listings", 0)
 
-      # Watch cycle summaries.
       watch_cycles = [event for event in events_in_window if event.event_type == "watch_cycle"]
       total_watch_checks = 0
       total_watch_updated = 0
@@ -976,7 +972,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         total_watch_completed += detail.get("completed", 0)
         total_watch_extensions += detail.get("extensions", 0)
 
-      # Fetch batch summaries.
       fetch_batches = [event for event in events_in_window if event.event_type == "fetch_batch"]
       total_fetched = 0
       total_classified = 0
@@ -987,17 +982,14 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         total_classified += detail.get("classified", 0)
         total_rejected += detail.get("rejected", 0)
 
-      # Pending fetches (unfetched listings still in DB).
       pending_fetches = session.execute(
         select(func.count(Listing.id))
         .where(Listing.is_fully_fetched.is_(False))
         .where(Listing.status != ListingStatus.CANCELLED)
       ).scalar() or 0
 
-      # Upcoming auctions (active listings with end_time in the future,
-      # sorted by end time ascending for an "ending soon" table).
       now_naive = now.replace(tzinfo=None)
-      upcoming_auctions = session.execute(
+      upcoming_listings = session.execute(
         select(Listing)
         .options(joinedload(Listing.website))
         .where(Listing.status == ListingStatus.ACTIVE)
@@ -1007,8 +999,25 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         .limit(50)
       ).scalars().unique().all()
 
-      # Time-series data: hourly buckets for new listings discovered and
-      # listings that ended (completed by watcher).
+      # Serialise upcoming auctions for the JSON API and template.
+      display_tz = ZoneInfo(config.display_timezone)
+      upcoming_auctions_json = []
+      for listing in upcoming_listings:
+        end_utc = listing.end_time.replace(tzinfo=UTC) if listing.end_time else None
+        upcoming_auctions_json.append({
+          "id": listing.id,
+          "title": listing.title or "",
+          "current_price": float(listing.current_price) if listing.current_price else None,
+          "currency": listing.currency or "",
+          "bid_count": listing.bid_count or 0,
+          "website_name": listing.website.name if listing.website else "",
+          "end_time_iso": end_utc.isoformat() if end_utc else None,
+          "end_time_display": (
+            end_utc.astimezone(display_tz).strftime("%d/%m %H:%M")
+            if end_utc else ""
+          ),
+        })
+
       hourly_new_listings: dict[str, int] = {}
       hourly_completed: dict[str, int] = {}
       hourly_errors: dict[str, int] = {}
@@ -1030,7 +1039,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         if event.event_type in request_types:
           hourly_requests[bucket] = hourly_requests.get(bucket, 0) + 1
 
-      # Build unified time-series labels (all hours in range).
       time_labels = []
       cursor = since.replace(minute=0, second=0, microsecond=0)
       while cursor <= now:
@@ -1045,56 +1053,57 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         "requests": [hourly_requests.get(label, 0) for label in time_labels],
       }
 
-      # Classification acceptance rate over time (daily).
-      classification_events = [
-        event for event in events_in_window if event.event_type == "classification"
-      ]
-      daily_accepted: dict[str, int] = {}
-      daily_rejected_cls: dict[str, int] = {}
-      for event in classification_events:
-        detail = json.loads(event.detail_json) if event.detail_json else {}
-        day = event.timestamp.strftime("%Y-%m-%d")
-        if detail.get("accepted"):
-          daily_accepted[day] = daily_accepted.get(day, 0) + 1
-        else:
-          daily_rejected_cls[day] = daily_rejected_cls.get(day, 0) + 1
-
-      # Recent errors list (most recent 50).
       recent_errors = []
       for event in error_events[:50]:
         detail = json.loads(event.detail_json) if event.detail_json else {}
         recent_errors.append({
-          "timestamp": event.timestamp,
+          "timestamp": event.timestamp.isoformat(),
           "website": event.website_name or "",
           "source": detail.get("source", ""),
           "message": detail.get("message", ""),
         })
 
+    return {
+      "pipeline_running": pipeline_running,
+      "pipeline_last_activity": (
+        pipeline_last_activity.isoformat() if pipeline_last_activity else None
+      ),
+      "event_type_counts": event_type_counts,
+      "website_request_counts": website_request_counts,
+      "error_count": len(error_events),
+      "error_by_source": error_by_source,
+      "error_by_website": error_by_website,
+      "search_stats": search_stats,
+      "total_watch_checks": total_watch_checks,
+      "total_watch_updated": total_watch_updated,
+      "total_watch_completed": total_watch_completed,
+      "total_watch_extensions": total_watch_extensions,
+      "watch_cycle_count": len(watch_cycles),
+      "total_fetched": total_fetched,
+      "total_classified": total_classified,
+      "total_rejected": total_rejected,
+      "fetch_batch_count": len(fetch_batches),
+      "pending_fetches": pending_fetches,
+      "upcoming_auctions": upcoming_auctions_json,
+      "timeseries_data": timeseries_data,
+      "recent_errors": recent_errors,
+    }
+
+  @app.route("/operations")
+  def operations():
+    hours_back = request.args.get("hours", 24, type=int)
+    data = _collect_operations_data(hours_back)
     return render_template(
       "operations.html",
-      pipeline_running=pipeline_running,
-      pipeline_last_activity=pipeline_last_activity,
       hours_back=hours_back,
-      event_type_counts=event_type_counts,
-      website_request_counts=website_request_counts,
-      error_count=len(error_events),
-      error_by_source=error_by_source,
-      error_by_website=error_by_website,
-      search_stats=search_stats,
-      total_watch_checks=total_watch_checks,
-      total_watch_updated=total_watch_updated,
-      total_watch_completed=total_watch_completed,
-      total_watch_extensions=total_watch_extensions,
-      watch_cycle_count=len(watch_cycles),
-      total_fetched=total_fetched,
-      total_classified=total_classified,
-      total_rejected=total_rejected,
-      fetch_batch_count=len(fetch_batches),
-      pending_fetches=pending_fetches,
-      upcoming_auctions=upcoming_auctions,
-      timeseries_data=timeseries_data,
-      recent_errors=recent_errors,
+      **data,
     )
+
+  @app.route("/api/operations/stats")
+  def operations_stats():
+    """Return all operations dashboard data as JSON for live polling."""
+    hours_back = request.args.get("hours", 24, type=int)
+    return json.dumps(_collect_operations_data(hours_back), cls=_DecimalDatetimeEncoder)
 
   # ------------------------------------------------------------------
   # Routes — Live status API
