@@ -70,31 +70,31 @@ The #1 issue was the **Camoufox/Playwright browser layer**, which was fragile an
 ## 4. Recommended Libraries & Tools for v2
 
 ### HTTP / Scraping
-| Purpose | Recommended | Why |
-|---------|------------|-----|
-| HTTP client | **`curl_cffi`** | Keep it — TLS fingerprint impersonation is excellent, works for 80% of sites |
-| Browser automation | **`playwright`** (directly) | Drop Camoufox. Use Playwright's async API with `asyncio`, not Sync API with threading. Simpler, better documented, fewer hacks |
-| HTML parsing | **`selectolax`** or **`beautifulsoup4`** | selectolax is 10-30x faster for large pages; BS4 is fine for smaller pages |
-| Anti-bot bypass | **`playwright-stealth`** or **`rebrowser-playwright`** | Lightweight stealth patches instead of a full wrapper like Camoufox |
+| Purpose            | Recommended                                            | Why                                                                                                                            |
+| ------------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| HTTP client        | **`curl_cffi`**                                        | Keep it — TLS fingerprint impersonation is excellent, works for 80% of sites                                                   |
+| Browser automation | **`playwright`** (directly)                            | Drop Camoufox. Use Playwright's async API with `asyncio`, not Sync API with threading. Simpler, better documented, fewer hacks |
+| HTML parsing       | **`selectolax`** or **`beautifulsoup4`**               | selectolax is 10-30x faster for large pages; BS4 is fine for smaller pages                                                     |
+| Anti-bot bypass    | **`playwright-stealth`** or **`rebrowser-playwright`** | Lightweight stealth patches instead of a full wrapper like Camoufox                                                            |
 
 ### Data & Storage
-| Purpose | Recommended | Why |
-|---------|------------|-----|
-| Database | **SQLite + SQLAlchemy 2.0** | Keep it — works great for this use case |
-| Migrations | **Alembic** | Keep it — already a dependency |
-| Validation | **Pydantic v2** | Already a dependency; use more aggressively for scraper output validation |
+| Purpose    | Recommended                 | Why                                                                       |
+| ---------- | --------------------------- | ------------------------------------------------------------------------- |
+| Database   | **SQLite + SQLAlchemy 2.0** | Keep it — works great for this use case                                   |
+| Migrations | **Alembic**                 | Keep it — already a dependency                                            |
+| Validation | **Pydantic v2**             | Already a dependency; use more aggressively for scraper output validation |
 
 ### Architecture & Quality
-| Purpose | Recommended | Why |
-|---------|------------|-----|
-| Async runtime | **`asyncio`** | Eliminate threading for browser work entirely |
-| Task queue | **`asyncio.Queue`** or **`celery`** (if multi-machine) | Decouple scraping from monitoring |
-| Testing | **`pytest`** + **`pytest-asyncio`** | Mandatory from day 1 |
-| Test fixtures | **`pytest-recording`** or **`vcrpy`** | Record HTTP responses, replay in tests |
-| Version control | **`git`** | Non-negotiable |
-| CI | **GitHub Actions** | Run tests on every push |
-| Linting | **`ruff`** | Fast, covers flake8 + isort + pyupgrade |
-| Type checking | **`mypy`** or **`pyright`** | Catches many bugs at edit time |
+| Purpose         | Recommended                                            | Why                                           |
+| --------------- | ------------------------------------------------------ | --------------------------------------------- |
+| Async runtime   | **`asyncio`**                                          | Eliminate threading for browser work entirely |
+| Task queue      | **`asyncio.Queue`** or **`celery`** (if multi-machine) | Decouple scraping from monitoring             |
+| Testing         | **`pytest`** + **`pytest-asyncio`**                    | Mandatory from day 1                          |
+| Test fixtures   | **`pytest-recording`** or **`vcrpy`**                  | Record HTTP responses, replay in tests        |
+| Version control | **`git`**                                              | Non-negotiable                                |
+| CI              | **GitHub Actions**                                     | Run tests on every push                       |
+| Linting         | **`ruff`**                                             | Fast, covers flake8 + isort + pyupgrade       |
+| Type checking   | **`mypy`** or **`pyright`**                            | Catches many bugs at edit time                |
 
 ---
 
@@ -335,17 +335,17 @@ async def get_with_fallback(url, website):
 
 ## 8. Summary
 
-| Aspect | v1 Status | v2 Recommendation |
-|--------|----------|-------------------|
-| Scraper parsing logic | ✅ Good | Keep, just split from transport |
-| Data model | ✅ Good | Keep as-is |
-| CLI & progress display | ✅ Good | Port with minor cleanup |
-| Monitoring strategies | ✅ Good | Port with better separation |
-| Browser integration | ❌ Broken | Rewrite: async Playwright, no threading |
-| Error recovery | ❌ Fragile | New: fallback transport, circuit breaker |
-| Testing | ❌ Nearly none | New: golden files, integration tests, CI |
-| Version control | ❌ None | New: git from day 1 |
-| File sizes | ⚠️ Giant files | Split into smaller modules |
-| Debug tooling | ⚠️ Ad-hoc scripts | New: `debug_scraper.py` as first-class tool |
+| Aspect                 | v1 Status           | v2 Recommendation                           |
+| ---------------------- | ------------------- | ------------------------------------------- |
+| Scraper parsing logic  | ✅ Good             | Keep, just split from transport             |
+| Data model             | ✅ Good             | Keep as-is                                  |
+| CLI & progress display | ✅ Good             | Port with minor cleanup                     |
+| Monitoring strategies  | ✅ Good             | Port with better separation                 |
+| Browser integration    | ❌ Broken           | Rewrite: async Playwright, no threading     |
+| Error recovery         | ❌ Fragile          | New: fallback transport, circuit breaker    |
+| Testing                | ❌ Nearly none      | New: golden files, integration tests, CI    |
+| Version control        | ❌ None             | New: git from day 1                         |
+| File sizes             | ⚠️ Giant files    | Split into smaller modules                  |
+| Debug tooling          | ⚠️ Ad-hoc scripts | New: `debug_scraper.py` as first-class tool |
 
 The core scraping logic and data model are solid — **the problem was entirely in the browser integration layer and the lack of testing**. A v2 that separates transport from parsing, uses async Playwright directly, and has golden-file parser tests from the start should be dramatically more stable.

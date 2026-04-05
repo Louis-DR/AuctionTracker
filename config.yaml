@@ -1,0 +1,77 @@
+database:
+  path: data/auction_tracker.db
+
+logging:
+  level: INFO               # DEBUG, INFO, WARNING, ERROR
+  file: data/auction_tracker.log
+  max_bytes: 10485760       # 10MB — rotated automatically
+  backup_count: 5
+
+transport:
+  default_request_delay: 2s # Minimum delay between requests to the same site
+  default_timeout: 30s      # HTTP / browser navigation timeout
+  max_retries: 3
+  retry_backoff_factor: 2.0
+  browser_page_limit: 3     # Max concurrent browser tabs
+  impersonation: chrome     # TLS fingerprint for curl_cffi
+
+classifier:
+  enabled: true
+  use_gpu: false            # Set true if a CUDA GPU is available
+  threshold: 0.50           # Min CLIP score to keep a listing (0–1)
+  images_directory: data/images
+  max_images_per_listing: 3 # How many images to download per listing
+
+scheduler:
+  discovery_interval: 10m   # How often discover runs in the pipeline loop
+  daily_refresh_interval: 1d
+  consecutive_failure_threshold: 5
+  failure_cooldown: 5m
+
+  # eBay / fixed-end-time sites (snapshot strategy)
+  snapshot:
+    routine_interval: 6h
+    approaching_threshold: 1h
+    approaching_interval: 10m
+    imminent_threshold: 5m
+    imminent_interval: 60s
+    ending_poll_interval: 2m
+    ending_max_wait: 10m
+
+  # Catawiki / extending auctions (full strategy)
+  full:
+    approaching_threshold: 1h
+    approaching_interval: 5m
+    imminent_threshold: 5m
+    imminent_interval: 20s
+    ending_poll_interval: 15s
+    ending_max_wait: 10m
+
+  # Drouot / results-after-sale (post_auction strategy)
+  post_auction:
+    delay_after_end: 15m
+    recheck_interval: 1h
+    max_wait: 3d
+    max_recheck_count: 10
+
+websites:
+  ebay:
+    enabled: true
+    transport: http
+    request_delay: 3s
+    monitoring_strategy: snapshot
+  leboncoin:
+    enabled: false
+    transport: browser       # LeBonCoin requires a full browser (DataDome)
+    monitoring_strategy: snapshot
+    # Browser transport auto-warms up the domain (homepage visit) and
+    # uses playwright-stealth + DataDome challenge waiting.
+  drouot:
+    transport: http
+    monitoring_strategy: post_auction
+  catawiki:
+    transport: http
+    fallback_transport: browser
+    monitoring_strategy: full
+  gazette_drouot:
+    enabled: false

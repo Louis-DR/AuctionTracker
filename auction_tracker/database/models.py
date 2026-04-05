@@ -115,9 +115,6 @@ class Website(Base):
   listings: Mapped[list[Listing]] = relationship(
     back_populates="website", cascade="all, delete-orphan",
   )
-  search_queries: Mapped[list[SearchQuery]] = relationship(
-    back_populates="website", cascade="all, delete-orphan",
-  )
 
 
 # ---------------------------------------------------------------------------
@@ -439,15 +436,14 @@ class ListingAttribute(Base):
 
 class SearchQuery(Base):
   """A saved search that the tracker runs periodically to discover new
-  listings.
+  listings across all enabled websites.
   """
 
   __tablename__ = "search_queries"
 
   id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-  website_id: Mapped[int | None] = mapped_column(ForeignKey("websites.id"), nullable=True)
 
-  name: Mapped[str] = mapped_column(String(300), nullable=False)
+  name: Mapped[str] = mapped_column(String(300), nullable=False, unique=True)
   query_text: Mapped[str] = mapped_column(String(1000), nullable=False)
   category: Mapped[str | None] = mapped_column(String(300), nullable=True)
   filters_json: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -462,5 +458,3 @@ class SearchQuery(Base):
   updated_at: Mapped[datetime] = mapped_column(
     DateTime, nullable=False, server_default=func.now(), onupdate=func.now(),
   )
-
-  website: Mapped[Website | None] = relationship(back_populates="search_queries")

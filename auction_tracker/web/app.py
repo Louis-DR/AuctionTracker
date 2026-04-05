@@ -709,9 +709,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
 
     with database.session() as session:
       saved_searches = session.execute(
-        select(SearchQuery)
-        .options(joinedload(SearchQuery.website))
-        .order_by(SearchQuery.name)
+        select(SearchQuery).order_by(SearchQuery.name)
       ).scalars().unique().all()
 
       saved_by_query_text: dict[str, list[dict]] = {}
@@ -719,9 +717,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         saved_dict = {
           "name": search.name,
           "category": search.category,
-          "website_name": (
-            search.website.name if search.website else "All websites"
-          ),
           "is_active": search.is_active,
         }
         saved_by_query_text.setdefault(search.query_text, []).append(saved_dict)
@@ -869,9 +864,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           "name": search.name,
           "query_text": search.query_text,
           "category": search.category,
-          "website_name": (
-            search.website.name if search.website else "All websites"
-          ),
           "is_active": search.is_active,
           "created_at": search.created_at,
           "total": stats.get("total", 0),

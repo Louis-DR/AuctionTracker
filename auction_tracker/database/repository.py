@@ -311,36 +311,22 @@ class Repository:
   # Search queries
   # -------------------------------------------------------------------
 
-  def get_active_searches(
-    self,
-    session: Session,
-    website_name: str | None = None,
-  ) -> Sequence[SearchQuery]:
+  def get_active_searches(self, session: Session) -> Sequence[SearchQuery]:
     statement = select(SearchQuery).where(SearchQuery.is_active.is_(True))
-    if website_name is not None:
-      statement = statement.join(Website).where(Website.name == website_name)
     return session.scalars(statement).all()
 
   def upsert_search_query(
     self,
     session: Session,
-    website_id: int | None,
     name: str,
     query_text: str,
     **kwargs,
   ) -> SearchQuery:
-    statement = select(SearchQuery).where(
-      SearchQuery.name == name,
-      SearchQuery.website_id == website_id,
-    )
+    """Insert or update a global saved search (matched by name)."""
+    statement = select(SearchQuery).where(SearchQuery.name == name)
     query = session.scalars(statement).first()
     if query is None:
-      query = SearchQuery(
-        website_id=website_id,
-        name=name,
-        query_text=query_text,
-        **kwargs,
-      )
+      query = SearchQuery(name=name, query_text=query_text, **kwargs)
       session.add(query)
     else:
       query.query_text = query_text

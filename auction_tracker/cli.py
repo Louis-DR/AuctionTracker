@@ -385,8 +385,8 @@ async def _fetch_async(app: AppContext, url: str, website: str) -> None:
 
 @main.command("search")
 @click.argument("query")
-@click.option("--website", type=str, multiple=True, help="Website(s) to search.")
-@click.option("--save", is_flag=True, default=False, help="Save the search query.")
+@click.option("--website", type=str, multiple=True, help="Restrict to specific website(s).")
+@click.option("--save", is_flag=True, default=False, help="Save the search query globally.")
 @click.option("--fetch/--no-fetch", default=False, help="Fetch full details for results.")
 @pass_context
 def search(
@@ -396,7 +396,7 @@ def search(
   save: bool,
   fetch: bool,
 ) -> None:
-  """Search for listings across websites."""
+  """Search for listings across all enabled websites."""
   asyncio.run(_search_async(app, query, website, save, fetch))
 
 
@@ -442,14 +442,6 @@ async def _search_async(
           if website_obj is None:
             continue
 
-          if save:
-            app.repository.upsert_search_query(
-              session,
-              website_id=website_obj.id,
-              name=f"{query} [{website_name}]",
-              query_text=query,
-            )
-
           for scraped_result in search_results:
             _listing, is_new = ingest.ingest_search_result(
               session, website_obj.id, scraped_result,
@@ -463,6 +455,12 @@ async def _search_async(
       except Exception as error:
         console.print(f"  [red]Error: {error}[/red]")
         logger.error("Search error on %s: %s", website_name, error, exc_info=True)
+
+  if save:
+    with app.database.session() as session:
+      app.repository.upsert_search_query(session, name=query, query_text=query)
+      session.commit()
+    console.print(f"\n[green]Saved search:[/green] '{query}' (runs on all websites)")
 
 
 # -------------------------------------------------------------------
@@ -480,18 +478,15 @@ def list_searches(app: AppContext) -> None:
     table.add_column("ID", style="dim")
     table.add_column("Name", style="cyan")
     table.add_column("Query", style="green")
-    table.add_column("Website")
     table.add_column("Last Run")
     table.add_column("Results", justify="right")
 
     for search_query in searches:
-      website_name = search_query.website.name if search_query.website else "all"
       last_run = search_query.last_run_at.strftime("%Y-%m-%d %H:%M") if search_query.last_run_at else "never"
       table.add_row(
         str(search_query.id),
         search_query.name,
         search_query.query_text,
-        website_name,
         last_run,
         str(search_query.result_count or 0),
       )
@@ -502,34 +497,16 @@ def list_searches(app: AppContext) -> None:
 @main.command("add-search")
 @click.argument("query")
 @click.option("--name", type=str, default=None, help="Name for the search (defaults to query text).")
-@click.option("--website", type=str, multiple=True, help="Website(s) to search (repeatable). Omit for all.")
 @pass_context
-def add_search(app: AppContext, query: str, name: str | None, website: tuple[str, ...]) -> None:
-  """Add a saved search query."""
+def add_search(app: AppContext, query: str, name: str | None) -> None:
+  """Add a saved search query (runs on all enabled websites)."""
   if name is None:
     name = query
 
   with app.database.session() as session:
-    if website:
-      for website_name in website:
-        website_obj = app.repository.get_website_by_name(session, website_name)
-        if website_obj is None:
-          console.print(f"[red]Website '{website_name}' not in database. Run seed-websites first.[/red]")
-          continue
-        search_name = f"{name} [{website_name}]"
-        app.repository.upsert_search_query(
-          session,
-          website_id=website_obj.id,
-          name=search_name,
-          query_text=query,
-        )
-        console.print(f"[green]Added search:[/green] '{search_name}' on {website_name}")
-    else:
-      app.repository.upsert_search_query(
-        session, website_id=None, name=name, query_text=query,
-      )
-      console.print(f"[green]Added search:[/green] '{name}' (all websites)")
+    app.repository.upsert_search_query(session, name=name, query_text=query)
     session.commit()
+  console.print(f"[green]Added search:[/green] '{name}'")
 
 
 # -------------------------------------------------------------------

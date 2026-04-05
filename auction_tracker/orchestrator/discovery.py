@@ -63,28 +63,58 @@ class DiscoveryLoop:
     session: Session,
     website_filter: str | None = None,
   ) -> tuple[DiscoveryStats, list[Listing]]:
-    """Run all active searches and return (stats, new_listings)."""
+    """Run all active searches across all enabled websites.
+
+    Each saved search is a global query: it is issued against every
+    enabled website that has search support. An optional ``website_filter``
+    restricts execution to a single website (useful for CLI debugging).
+    """
     stats = DiscoveryStats()
     all_new_listings: list[Listing] = []
 
-    searches = self._repo.get_active_searches(session, website_name=website_filter)
+    searches = self._repo.get_active_searches(session)
     if not searches:
       logger.info("No active searches to run")
       return stats, all_new_listings
 
+    # Collect the list of enabled, searchable websites once.
+    all_websites = self._repo.get_active_websites(session)
+    target_websites = [
+      w for w in all_websites
+      if (website_filter is None or w.name == website_filter)
+      and ParserRegistry.has(w.name)
+      and ParserRegistry.get(w.name).capabilities.can_search
+      and self._config.website(w.name).enabled
+      and not self._config.website(w.name).exclude_from_discovery
+    ]
+
+    if not target_websites:
+      logger.info("No searchable websites available")
+      return stats, all_new_listings
+
     for search_query in searches:
-      try:
-        new_listings = await self._run_search(session, search_query, stats)
-        all_new_listings.extend(new_listings)
-        session.commit()
-      except Exception as error:
-        stats.errors += 1
-        session.rollback()
-        logger.error(
-          "Error running search '%s': %s",
-          search_query.name, error,
-          exc_info=True,
-        )
+      total_results = 0
+      for website in target_websites:
+        try:
+          new_listings, result_count = await self._run_search_on_website(
+            session, search_query, website.name, stats,
+          )
+          all_new_listings.extend(new_listings)
+          total_results += result_count
+          session.commit()
+        except Exception as error:
+          stats.errors += 1
+          session.rollback()
+          logger.error(
+            "Error running search '%s' on %s: %s",
+            search_query.name, website.name, error,
+            exc_info=True,
+          )
+
+      from datetime import datetime
+      search_query.last_run_at = datetime.utcnow()
+      search_query.result_count = total_results
+      session.commit()
 
     logger.info(
       "Discovery complete: %d searches, %d results, %d new listings, %d errors",
@@ -92,31 +122,16 @@ class DiscoveryLoop:
     )
     return stats, all_new_listings
 
-  async def _run_search(
+  async def _run_search_on_website(
     self,
     session: Session,
     search_query: SearchQuery,
+    website_name: str,
     stats: DiscoveryStats,
-  ) -> list[Listing]:
-    """Run a single search query and return newly discovered listings."""
-    website = search_query.website
-    if website is None:
-      logger.warning("Search '%s' has no website, skipping", search_query.name)
-      return []
-
-    website_name = website.name
-    website_config = self._config.website(website_name)
-    if not website_config.enabled:
-      return []
-    if website_config.exclude_from_discovery:
-      return []
-    if not ParserRegistry.has(website_name):
-      logger.warning("No parser for website '%s', skipping search", website_name)
-      return []
-
+  ) -> tuple[list[Listing], int]:
+    """Run a single search on one website and return (new_listings, result_count)."""
     parser = ParserRegistry.get(website_name)
-    if not parser.capabilities.can_search:
-      return []
+    website_config = self._config.website(website_name)
 
     search_kwargs: dict = {}
     if website_config.preferred_domain:
@@ -134,24 +149,24 @@ class DiscoveryLoop:
       logger.warning(
         "Search URL blocked on %s: %s — skipping", website_name, search_url,
       )
-      return []
+      return [], 0
     stats.searches_run += 1
     stats.results_found += len(search_results)
 
-    from datetime import datetime
-    search_query.last_run_at = datetime.utcnow()
-    search_query.result_count = len(search_results)
+    website_obj = self._repo.get_website_by_name(session, website_name)
+    if website_obj is None:
+      return [], 0
 
     new_listings: list[Listing] = []
     for scraped_result in search_results:
       listing, is_new = self._ingest.ingest_search_result(
-        session, website.id, scraped_result,
+        session, website_obj.id, scraped_result,
       )
       if is_new:
         stats.new_listings += 1
         new_listings.append(listing)
 
-    return new_listings
+    return new_listings, len(search_results)
 
   async def fetch_unfetched(
     self,
