@@ -1065,9 +1065,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
 
     return {
       "pipeline_running": pipeline_running,
-      "pipeline_last_activity": (
-        pipeline_last_activity.isoformat() if pipeline_last_activity else None
-      ),
+      "pipeline_last_activity": pipeline_last_activity,
       "event_type_counts": event_type_counts,
       "website_request_counts": website_request_counts,
       "error_count": len(error_events),
