@@ -107,9 +107,15 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
   def filter_format_date(value):
     if value is None:
       return "\u2013"
-    if value.tzinfo is None:
-      value = value.replace(tzinfo=UTC)
-    return value.astimezone(display_tz).strftime("%Y-%m-%d")
+    # Plain date objects have no tzinfo; just format directly.
+    from datetime import date as _date, datetime as _datetime
+    if isinstance(value, _datetime):
+      if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+      return value.astimezone(display_tz).strftime("%Y-%m-%d")
+    if isinstance(value, _date):
+      return value.strftime("%Y-%m-%d")
+    return str(value)
 
   @app.template_filter("tojson_safe")
   def filter_tojson_safe(value):
