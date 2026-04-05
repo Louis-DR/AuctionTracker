@@ -145,11 +145,35 @@ class DiscoveryLoop:
     result = await self._router.fetch(website_name, search_url)
     try:
       search_results = parser.parse_search_results(result.html, url=search_url)
-    except ParserBlocked:
-      logger.warning(
-        "Search URL blocked on %s: %s — skipping", website_name, search_url,
-      )
-      return [], 0
+    except ParserBlocked as blocked_error:
+      fallback_urls = blocked_error.fallback_urls
+      if not fallback_urls:
+        logger.warning(
+          "Search URL blocked on %s: %s — no fallbacks, skipping",
+          website_name, search_url,
+        )
+        return [], 0
+      # Try each fallback domain in order (e.g. ebay.fr → ebay.com → ebay.co.uk).
+      for fallback_url in fallback_urls:
+        logger.info(
+          "Search blocked on %s, retrying with fallback: %s",
+          website_name, fallback_url,
+        )
+        try:
+          fallback_result = await self._router.fetch(website_name, fallback_url)
+          search_results = parser.parse_search_results(
+            fallback_result.html, url=fallback_url,
+          )
+          search_url = fallback_url
+          break
+        except ParserBlocked:
+          continue
+      else:
+        logger.warning(
+          "Search URL blocked on %s: all fallbacks exhausted, skipping",
+          website_name,
+        )
+        return [], 0
     stats.searches_run += 1
     stats.results_found += len(search_results)
 
