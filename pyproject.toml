@@ -24,6 +24,7 @@ dependencies = [
 [project.optional-dependencies]
 browser = [
   "playwright>=1.40",
+  "playwright-stealth>=2.0",
 ]
 dev = [
   "pytest>=8.0",
