@@ -52,11 +52,13 @@ class DiscoveryLoop:
     config: AppConfig,
     router: TransportRouter,
     repository: Repository,
+    metrics=None,
   ) -> None:
     self._config = config
     self._router = router
     self._repo = repository
     self._ingest = Ingest(repository)
+    self._metrics = metrics
 
   async def run_all(
     self,
@@ -102,6 +104,11 @@ class DiscoveryLoop:
           all_new_listings.extend(new_listings)
           total_results += result_count
           session.commit()
+          if self._metrics:
+            self._metrics.search_run(
+              website.name, search_query.query_text,
+              result_count, len(new_listings),
+            )
         except Exception as error:
           stats.errors += 1
           session.rollback()
@@ -110,6 +117,8 @@ class DiscoveryLoop:
             search_query.name, website.name, error,
             exc_info=True,
           )
+          if self._metrics:
+            self._metrics.error("search", str(error), website_name=website.name)
 
       from datetime import datetime
       search_query.last_run_at = datetime.utcnow()
@@ -243,6 +252,8 @@ class DiscoveryLoop:
         )
         self._ingest.ingest_listing(session, listing.website_id, scraped)
         stats.listings_fetched += 1
+        if self._metrics:
+          self._metrics.fetch_listing(website_name, listing.external_id)
 
         # Run classification if enabled and images are available.
         if classify and scraped.image_urls:
@@ -256,6 +267,10 @@ class DiscoveryLoop:
               image_paths, self._config.classifier,
             )
             stats.listings_classified += 1
+            if self._metrics:
+              self._metrics.classification(
+                website_name, listing.external_id, is_relevant, score,
+              )
             if not is_relevant:
               stats.listings_rejected += 1
               from auction_tracker.database.models import ListingStatus
@@ -269,7 +284,7 @@ class DiscoveryLoop:
               )
 
         session.commit()
-      except Exception:
+      except Exception as exc:
         session.rollback()
         stats.errors += 1
         logger.error(
@@ -277,10 +292,17 @@ class DiscoveryLoop:
           listing.external_id,
           exc_info=True,
         )
+        if self._metrics:
+          self._metrics.error("fetch", str(exc), website_name=website_name)
 
     logger.info(
       "Fetch complete: %d fetched, %d classified, %d rejected, %d errors",
       stats.listings_fetched, stats.listings_classified,
       stats.listings_rejected, stats.errors,
     )
+    if self._metrics:
+      self._metrics.fetch_batch(
+        stats.listings_fetched, stats.listings_classified,
+        stats.listings_rejected, stats.errors,
+      )
     return stats

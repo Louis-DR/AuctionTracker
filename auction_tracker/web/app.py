@@ -36,6 +36,7 @@ from auction_tracker.database.models import (
   ListingImage,
   ListingStatus,
   ListingType,
+  PipelineEvent,
   SearchQuery,
   Seller,
   Website,
@@ -171,6 +172,8 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
          .where(Listing.final_price.isnot(None))
       ).one()
 
+      rejected_count = status_counts.get(ListingStatus.CANCELLED, 0)
+
       recent_listings = session.execute(
         select(Listing)
         .options(joinedload(Listing.website))
@@ -186,6 +189,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         total_sellers=total_sellers,
         total_websites=total_websites,
         total_images=total_images,
+        rejected_count=rejected_count,
         price_avg=price_stats[0],
         price_min=price_stats[1],
         price_max=price_stats[2],
@@ -877,6 +881,218 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       search_stats=sorted_searches,
       saved_searches=saved_search_list,
       ListingStatus=ListingStatus,
+    )
+
+  # ------------------------------------------------------------------
+  # Routes — Operations dashboard
+  # ------------------------------------------------------------------
+
+  @app.route("/operations")
+  def operations():
+    now = datetime.now(UTC)
+    hours_back = request.args.get("hours", 24, type=int)
+    since = now - timedelta(hours=hours_back)
+    since_naive = since.replace(tzinfo=None)
+
+    with database.session() as session:
+      # Pipeline running status: last start vs last stop.
+      last_start = session.execute(
+        select(PipelineEvent.timestamp)
+        .where(PipelineEvent.event_type == "pipeline_start")
+        .order_by(desc(PipelineEvent.timestamp))
+        .limit(1)
+      ).scalar()
+      last_stop = session.execute(
+        select(PipelineEvent.timestamp)
+        .where(PipelineEvent.event_type == "pipeline_stop")
+        .order_by(desc(PipelineEvent.timestamp))
+        .limit(1)
+      ).scalar()
+      pipeline_running = (
+        last_start is not None
+        and (last_stop is None or last_start > last_stop)
+      )
+      pipeline_last_activity = session.execute(
+        select(func.max(PipelineEvent.timestamp))
+      ).scalar()
+
+      # All events in the time window.
+      events_in_window = session.execute(
+        select(PipelineEvent)
+        .where(PipelineEvent.timestamp >= since_naive)
+        .order_by(desc(PipelineEvent.timestamp))
+      ).scalars().all()
+
+      # Aggregate event counts by type.
+      event_type_counts: dict[str, int] = {}
+      for event in events_in_window:
+        event_type_counts[event.event_type] = event_type_counts.get(event.event_type, 0) + 1
+
+      # Per-website request counts (search_run + fetch_listing + watch_check).
+      request_types = {"search_run", "fetch_listing", "watch_check"}
+      website_request_counts: dict[str, int] = {}
+      for event in events_in_window:
+        if event.event_type in request_types and event.website_name:
+          website_request_counts[event.website_name] = (
+            website_request_counts.get(event.website_name, 0) + 1
+          )
+
+      # Error breakdown.
+      error_events = [event for event in events_in_window if event.event_type == "error"]
+      error_by_source: dict[str, int] = {}
+      error_by_website: dict[str, int] = {}
+      for event in error_events:
+        detail = json.loads(event.detail_json) if event.detail_json else {}
+        source = detail.get("source", "unknown")
+        error_by_source[source] = error_by_source.get(source, 0) + 1
+        if event.website_name:
+          error_by_website[event.website_name] = (
+            error_by_website.get(event.website_name, 0) + 1
+          )
+
+      # Search stats per website (new listings discovered).
+      search_events = [event for event in events_in_window if event.event_type == "search_run"]
+      search_stats: dict[str, dict] = {}
+      for event in search_events:
+        detail = json.loads(event.detail_json) if event.detail_json else {}
+        website = event.website_name or "unknown"
+        if website not in search_stats:
+          search_stats[website] = {"runs": 0, "results": 0, "new": 0}
+        search_stats[website]["runs"] += 1
+        search_stats[website]["results"] += detail.get("results_found", 0)
+        search_stats[website]["new"] += detail.get("new_listings", 0)
+
+      # Watch cycle summaries.
+      watch_cycles = [event for event in events_in_window if event.event_type == "watch_cycle"]
+      total_watch_checks = 0
+      total_watch_updated = 0
+      total_watch_completed = 0
+      total_watch_extensions = 0
+      for event in watch_cycles:
+        detail = json.loads(event.detail_json) if event.detail_json else {}
+        total_watch_checks += detail.get("checks", 0)
+        total_watch_updated += detail.get("updated", 0)
+        total_watch_completed += detail.get("completed", 0)
+        total_watch_extensions += detail.get("extensions", 0)
+
+      # Fetch batch summaries.
+      fetch_batches = [event for event in events_in_window if event.event_type == "fetch_batch"]
+      total_fetched = 0
+      total_classified = 0
+      total_rejected = 0
+      for event in fetch_batches:
+        detail = json.loads(event.detail_json) if event.detail_json else {}
+        total_fetched += detail.get("fetched", 0)
+        total_classified += detail.get("classified", 0)
+        total_rejected += detail.get("rejected", 0)
+
+      # Pending fetches (unfetched listings still in DB).
+      pending_fetches = session.execute(
+        select(func.count(Listing.id))
+        .where(Listing.is_fully_fetched.is_(False))
+        .where(Listing.status != ListingStatus.CANCELLED)
+      ).scalar() or 0
+
+      # Upcoming auctions (active listings with end_time in the future,
+      # sorted by end time ascending for an "ending soon" table).
+      now_naive = now.replace(tzinfo=None)
+      upcoming_auctions = session.execute(
+        select(Listing)
+        .options(joinedload(Listing.website))
+        .where(Listing.status == ListingStatus.ACTIVE)
+        .where(Listing.end_time.isnot(None))
+        .where(Listing.end_time > now_naive)
+        .order_by(Listing.end_time.asc())
+        .limit(50)
+      ).scalars().unique().all()
+
+      # Time-series data: hourly buckets for new listings discovered and
+      # listings that ended (completed by watcher).
+      hourly_new_listings: dict[str, int] = {}
+      hourly_completed: dict[str, int] = {}
+      hourly_errors: dict[str, int] = {}
+      hourly_requests: dict[str, int] = {}
+      for event in events_in_window:
+        bucket = event.timestamp.strftime("%Y-%m-%d %H:00")
+        if event.event_type == "search_run":
+          detail = json.loads(event.detail_json) if event.detail_json else {}
+          hourly_new_listings[bucket] = (
+            hourly_new_listings.get(bucket, 0) + detail.get("new_listings", 0)
+          )
+        if event.event_type == "watch_cycle":
+          detail = json.loads(event.detail_json) if event.detail_json else {}
+          hourly_completed[bucket] = (
+            hourly_completed.get(bucket, 0) + detail.get("completed", 0)
+          )
+        if event.event_type == "error":
+          hourly_errors[bucket] = hourly_errors.get(bucket, 0) + 1
+        if event.event_type in request_types:
+          hourly_requests[bucket] = hourly_requests.get(bucket, 0) + 1
+
+      # Build unified time-series labels (all hours in range).
+      time_labels = []
+      cursor = since.replace(minute=0, second=0, microsecond=0)
+      while cursor <= now:
+        time_labels.append(cursor.strftime("%Y-%m-%d %H:00"))
+        cursor += timedelta(hours=1)
+
+      timeseries_data = {
+        "labels": time_labels,
+        "new_listings": [hourly_new_listings.get(label, 0) for label in time_labels],
+        "completed": [hourly_completed.get(label, 0) for label in time_labels],
+        "errors": [hourly_errors.get(label, 0) for label in time_labels],
+        "requests": [hourly_requests.get(label, 0) for label in time_labels],
+      }
+
+      # Classification acceptance rate over time (daily).
+      classification_events = [
+        event for event in events_in_window if event.event_type == "classification"
+      ]
+      daily_accepted: dict[str, int] = {}
+      daily_rejected_cls: dict[str, int] = {}
+      for event in classification_events:
+        detail = json.loads(event.detail_json) if event.detail_json else {}
+        day = event.timestamp.strftime("%Y-%m-%d")
+        if detail.get("accepted"):
+          daily_accepted[day] = daily_accepted.get(day, 0) + 1
+        else:
+          daily_rejected_cls[day] = daily_rejected_cls.get(day, 0) + 1
+
+      # Recent errors list (most recent 50).
+      recent_errors = []
+      for event in error_events[:50]:
+        detail = json.loads(event.detail_json) if event.detail_json else {}
+        recent_errors.append({
+          "timestamp": event.timestamp,
+          "website": event.website_name or "",
+          "source": detail.get("source", ""),
+          "message": detail.get("message", ""),
+        })
+
+    return render_template(
+      "operations.html",
+      pipeline_running=pipeline_running,
+      pipeline_last_activity=pipeline_last_activity,
+      hours_back=hours_back,
+      event_type_counts=event_type_counts,
+      website_request_counts=website_request_counts,
+      error_count=len(error_events),
+      error_by_source=error_by_source,
+      error_by_website=error_by_website,
+      search_stats=search_stats,
+      total_watch_checks=total_watch_checks,
+      total_watch_updated=total_watch_updated,
+      total_watch_completed=total_watch_completed,
+      total_watch_extensions=total_watch_extensions,
+      watch_cycle_count=len(watch_cycles),
+      total_fetched=total_fetched,
+      total_classified=total_classified,
+      total_rejected=total_rejected,
+      fetch_batch_count=len(fetch_batches),
+      pending_fetches=pending_fetches,
+      upcoming_auctions=upcoming_auctions,
+      timeseries_data=timeseries_data,
+      recent_errors=recent_errors,
     )
 
   # ------------------------------------------------------------------

@@ -1,0 +1,411 @@
+{% extends "base.html" %}
+{% set active_page = "operations" %}
+{% block title %}Operations – AuctionTracker{% endblock %}
+
+{% block extra_css %}
+.status-indicator {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  margin-right: 0.4rem;
+  vertical-align: middle;
+}
+.status-running { background: #2ecc40; box-shadow: 0 0 6px #2ecc40; }
+.status-stopped { background: #ff4136; }
+.status-unknown { background: #aaa; }
+
+.metric-card {
+  text-align: center;
+  padding: 0.8rem 0.5rem;
+}
+.metric-card .stat-number {
+  font-size: 2rem;
+}
+.metric-card .stat-label {
+  font-size: 0.75rem;
+}
+
+.time-filter {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+.time-filter a {
+  padding: 0.3em 0.7em;
+  border-radius: var(--pico-border-radius);
+  font-size: 0.85em;
+  text-decoration: none;
+}
+.time-filter a.active {
+  background: var(--pico-primary);
+  color: var(--pico-primary-inverse);
+}
+
+.ending-soon {
+  color: #ff4136;
+  font-weight: 600;
+}
+.ending-moderate {
+  color: #ff851b;
+  font-weight: 600;
+}
+
+.error-row td {
+  font-size: 0.85em;
+}
+.error-message {
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+{% endblock %}
+
+{% block content %}
+<h1>Operations</h1>
+
+<!-- Time range filter -->
+<div class="time-filter">
+  <span style="align-self: center; font-size: 0.85em; opacity: 0.7;">Time range:</span>
+  {% for hours_option in [1, 6, 12, 24, 48, 168] %}
+  <a href="/operations?hours={{ hours_option }}"
+     {% if hours_back == hours_option %}class="active"{% endif %}>
+    {% if hours_option < 24 %}{{ hours_option }}h{% elif hours_option == 24 %}1d{% elif hours_option == 48 %}2d{% else %}7d{% endif %}
+  </a>
+  {% endfor %}
+</div>
+
+<!-- Pipeline status -->
+<div class="grid">
+  <article class="metric-card">
+    <p class="stat-label">Pipeline Status</p>
+    <p class="stat-number">
+      {% if pipeline_running %}
+      <span class="status-indicator status-running"></span> Running
+      {% elif pipeline_last_activity %}
+      <span class="status-indicator status-stopped"></span> Stopped
+      {% else %}
+      <span class="status-indicator status-unknown"></span> No data
+      {% endif %}
+    </p>
+    {% if pipeline_last_activity %}
+    <small class="muted">Last activity: {{ pipeline_last_activity|format_datetime }}</small>
+    {% endif %}
+  </article>
+  <article class="metric-card">
+    <p class="stat-label">Pending Fetches</p>
+    <p class="stat-number" {% if pending_fetches > 50 %}style="color: #ff851b;"{% endif %}>
+      {{ pending_fetches }}
+    </p>
+    <small class="muted">Unfetched listings in DB</small>
+  </article>
+  <article class="metric-card">
+    <p class="stat-label">Errors ({{ hours_back }}h)</p>
+    <p class="stat-number" {% if error_count > 0 %}style="color: #ff4136;"{% endif %}>
+      {{ error_count }}
+    </p>
+  </article>
+  <article class="metric-card">
+    <p class="stat-label">Watch Cycles</p>
+    <p class="stat-number">{{ watch_cycle_count }}</p>
+    <small class="muted">{{ total_watch_checks }} checks total</small>
+  </article>
+</div>
+
+<!-- Loop summaries -->
+<div class="grid">
+  <article>
+    <header><strong>Search Loop</strong></header>
+    {% if search_stats %}
+    <table>
+      <thead>
+        <tr><th>Website</th><th class="text-right">Runs</th><th class="text-right">Found</th><th class="text-right">New</th></tr>
+      </thead>
+      <tbody>
+        {% for website, stats in search_stats|dictsort %}
+        <tr>
+          <td>{{ website }}</td>
+          <td class="text-right">{{ stats.runs }}</td>
+          <td class="text-right">{{ stats.results }}</td>
+          <td class="text-right">{{ stats.new }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No search events in the last {{ hours_back }}h.</p>
+    {% endif %}
+  </article>
+
+  <article>
+    <header><strong>Fetch Loop</strong></header>
+    <table>
+      <tbody>
+        <tr><td>Batches</td><td class="text-right">{{ fetch_batch_count }}</td></tr>
+        <tr><td>Listings fetched</td><td class="text-right">{{ total_fetched }}</td></tr>
+        <tr><td>Classified</td><td class="text-right">{{ total_classified }}</td></tr>
+        <tr>
+          <td>Rejected by classifier</td>
+          <td class="text-right" {% if total_rejected > 0 %}style="color: #ff851b;"{% endif %}>
+            {{ total_rejected }}
+          </td>
+        </tr>
+        <tr><td>Pending</td><td class="text-right">{{ pending_fetches }}</td></tr>
+      </tbody>
+    </table>
+  </article>
+
+  <article>
+    <header><strong>Watch Loop</strong></header>
+    <table>
+      <tbody>
+        <tr><td>Cycles</td><td class="text-right">{{ watch_cycle_count }}</td></tr>
+        <tr><td>Checks performed</td><td class="text-right">{{ total_watch_checks }}</td></tr>
+        <tr><td>Updated</td><td class="text-right">{{ total_watch_updated }}</td></tr>
+        <tr><td>Completed (terminal)</td><td class="text-right">{{ total_watch_completed }}</td></tr>
+        <tr><td>Extensions detected</td><td class="text-right">{{ total_watch_extensions }}</td></tr>
+      </tbody>
+    </table>
+  </article>
+</div>
+
+<!-- Requests per website chart -->
+<h2>Requests per Website ({{ hours_back }}h)</h2>
+<div class="chart-container">
+  <canvas id="requestsChart" height="200"></canvas>
+</div>
+
+<!-- Time-series charts -->
+<h2>Activity Over Time</h2>
+<div class="chart-container">
+  <canvas id="activityChart" height="220"></canvas>
+</div>
+
+<div class="chart-container">
+  <canvas id="errorsChart" height="150"></canvas>
+</div>
+
+<!-- Upcoming auctions (ending soonest) -->
+<h2>Upcoming Auctions (Ending Soon)</h2>
+{% if upcoming_auctions %}
+<div style="overflow-x: auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th class="text-right">Price</th>
+        <th class="text-right">Bids</th>
+        <th>Website</th>
+        <th>Ends</th>
+        <th>Time Left</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for listing in upcoming_auctions %}
+      {% set seconds_left = (listing.end_time|string|replace(' ', 'T') + 'Z')|default(0) %}
+      <tr class="clickable-row" onclick="location.href='/listings/{{ listing.id }}'">
+        <td>{{ listing.title[:60] }}{% if listing.title|length > 60 %}&hellip;{% endif %}</td>
+        <td class="text-right no-wrap">
+          {% if listing.current_price is not none %}
+            {{ listing.current_price|format_price(listing.currency) }}
+          {% else %}
+            &ndash;
+          {% endif %}
+        </td>
+        <td class="text-right">{{ listing.bid_count }}</td>
+        <td>{{ listing.website.name if listing.website else "?" }}</td>
+        <td class="no-wrap">{{ listing.end_time|format_datetime }}</td>
+        <td class="no-wrap" data-end-time="{{ listing.end_time.isoformat() }}Z">
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="muted">No active auctions with a known end time.</p>
+{% endif %}
+
+<!-- Error breakdown -->
+{% if error_count > 0 %}
+<h2>Errors</h2>
+<div class="grid">
+  <article>
+    <header><strong>By Source</strong></header>
+    <table>
+      <tbody>
+        {% for source, count in error_by_source|dictsort(by='value', reverse=true) %}
+        <tr><td>{{ source }}</td><td class="text-right">{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </article>
+  <article>
+    <header><strong>By Website</strong></header>
+    <table>
+      <tbody>
+        {% for website, count in error_by_website|dictsort(by='value', reverse=true) %}
+        <tr><td>{{ website }}</td><td class="text-right">{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </article>
+</div>
+
+<h3>Recent Errors</h3>
+<div style="overflow-x: auto;">
+  <table>
+    <thead>
+      <tr><th>Time</th><th>Source</th><th>Website</th><th>Message</th></tr>
+    </thead>
+    <tbody>
+      {% for error in recent_errors %}
+      <tr class="error-row">
+        <td class="no-wrap">{{ error.timestamp|format_datetime }}</td>
+        <td>{{ error.source }}</td>
+        <td>{{ error.website }}</td>
+        <td class="error-message" title="{{ error.message }}">{{ error.message[:80] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+// Requests per website bar chart.
+const websiteData = {{ website_request_counts|tojson_safe }};
+const websiteLabels = Object.keys(websiteData).sort();
+const websiteCounts = websiteLabels.map(label => websiteData[label]);
+
+const websiteColors = [
+  '#0074d9', '#2ecc40', '#ff4136', '#ff851b', '#b10dc9',
+  '#7c3aed', '#f59e0b', '#06b6d4', '#aaa', '#333',
+];
+
+new Chart(document.getElementById('requestsChart'), {
+  type: 'bar',
+  data: {
+    labels: websiteLabels,
+    datasets: [{
+      label: 'Requests',
+      data: websiteCounts,
+      backgroundColor: websiteLabels.map((_, index) => websiteColors[index % websiteColors.length]),
+      borderRadius: 4,
+    }],
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+  },
+});
+
+// Activity over time line chart.
+const timeseriesData = {{ timeseries_data|tojson_safe }};
+const shortLabels = timeseriesData.labels.map(label => {
+  const parts = label.split(' ');
+  return parts[1] || label;
+});
+
+new Chart(document.getElementById('activityChart'), {
+  type: 'line',
+  data: {
+    labels: shortLabels,
+    datasets: [
+      {
+        label: 'New Listings',
+        data: timeseriesData.new_listings,
+        borderColor: '#2ecc40',
+        backgroundColor: 'rgba(46, 204, 64, 0.1)',
+        fill: true,
+        tension: 0.3,
+      },
+      {
+        label: 'Completed',
+        data: timeseriesData.completed,
+        borderColor: '#0074d9',
+        backgroundColor: 'rgba(0, 116, 217, 0.1)',
+        fill: true,
+        tension: 0.3,
+      },
+      {
+        label: 'Requests',
+        data: timeseriesData.requests,
+        borderColor: '#aaa',
+        backgroundColor: 'rgba(170, 170, 170, 0.08)',
+        fill: true,
+        tension: 0.3,
+        borderDash: [4, 4],
+      },
+    ],
+  },
+  options: {
+    responsive: true,
+    interaction: { intersect: false, mode: 'index' },
+    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+    plugins: { legend: { position: 'top' } },
+  },
+});
+
+// Errors over time.
+new Chart(document.getElementById('errorsChart'), {
+  type: 'bar',
+  data: {
+    labels: shortLabels,
+    datasets: [{
+      label: 'Errors',
+      data: timeseriesData.errors,
+      backgroundColor: 'rgba(255, 65, 54, 0.6)',
+      borderColor: '#ff4136',
+      borderWidth: 1,
+      borderRadius: 2,
+    }],
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+  },
+});
+
+// Live countdown for "time left" cells.
+function updateCountdowns() {
+  document.querySelectorAll('[data-end-time]').forEach(cell => {
+    const endTime = new Date(cell.dataset.endTime);
+    const now = new Date();
+    const diffMs = endTime - now;
+    if (diffMs <= 0) {
+      cell.textContent = 'Ended';
+      cell.className = 'no-wrap muted';
+      return;
+    }
+    const totalMinutes = Math.floor(diffMs / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    if (hours > 0) {
+      cell.textContent = hours + 'h ' + minutes + 'm';
+    } else {
+      cell.textContent = minutes + 'm';
+    }
+
+    if (totalMinutes < 30) {
+      cell.className = 'no-wrap ending-soon';
+    } else if (totalMinutes < 120) {
+      cell.className = 'no-wrap ending-moderate';
+    } else {
+      cell.className = 'no-wrap';
+    }
+  });
+}
+updateCountdowns();
+setInterval(updateCountdowns, 30000);
+</script>
+{% endblock %}

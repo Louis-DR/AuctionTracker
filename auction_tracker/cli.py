@@ -565,8 +565,12 @@ async def _run_pipeline_async(
   max_fetch_per_cycle: int,
 ) -> None:
   from auction_tracker.orchestrator.discovery import DiscoveryLoop
+  from auction_tracker.orchestrator.metrics import MetricsCollector
   from auction_tracker.orchestrator.watcher import Watcher
   from auction_tracker.transport.router import TransportRouter
+
+  metrics = MetricsCollector(app.database)
+  metrics.pipeline_started()
 
   # Discovery and watcher use separate transport routers so their
   # per-domain rate limiters are fully independent. Without this, a
@@ -576,8 +580,8 @@ async def _run_pipeline_async(
     TransportRouter(app.config) as discovery_router,
     TransportRouter(app.config) as watcher_router,
   ):
-    discovery = DiscoveryLoop(app.config, discovery_router, app.repository)
-    watcher = Watcher(app.config, app.database, watcher_router, app.repository)
+    discovery = DiscoveryLoop(app.config, discovery_router, app.repository, metrics=metrics)
+    watcher = Watcher(app.config, app.database, watcher_router, app.repository, metrics=metrics)
 
     # --- Helpers shared by once and continuous modes ---
 
@@ -674,6 +678,7 @@ async def _run_pipeline_async(
       stop_event.set()
       with contextlib.suppress(Exception):
         await asyncio.gather(search_task, fetch_task, return_exceptions=True)
+      metrics.pipeline_stopped()
       console.print("\n[yellow]Pipeline stopped.[/yellow]")
 
 

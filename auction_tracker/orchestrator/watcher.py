@@ -71,11 +71,13 @@ class Watcher:
     database: DatabaseEngine,
     router: TransportRouter,
     repository: Repository,
+    metrics=None,
   ) -> None:
     self._config = config
     self._database = database
     self._router = router
     self._repo = repository
+    self._metrics = metrics
     self._ingest = Ingest(repository)
     self._scheduler = Scheduler(config.scheduler)
     self._queue = CheckQueue()
@@ -160,6 +162,8 @@ class Watcher:
     for tracked in due_listings:
       try:
         await self._check_listing(tracked, stats)
+        if self._metrics:
+          self._metrics.watch_check(tracked.website_name, tracked.external_id)
       except Exception as error:
         stats.errors += 1
         tracked.consecutive_failures += 1
@@ -168,6 +172,8 @@ class Watcher:
           tracked.external_id, tracked.website_name, error,
           exc_info=True,
         )
+        if self._metrics:
+          self._metrics.error("watch", str(error), website_name=tracked.website_name)
 
       # Reschedule (even after errors, with backoff).
       schedule = self._scheduler.compute_next_check(tracked)
@@ -185,6 +191,12 @@ class Watcher:
       stats.checks_performed, stats.listings_updated,
       stats.listings_completed, stats.errors,
     )
+    if self._metrics and stats.checks_performed > 0:
+      self._metrics.watch_cycle(
+        stats.checks_performed, stats.listings_updated,
+        stats.listings_completed, stats.extensions_detected,
+        stats.errors,
+      )
     return stats
 
   async def _check_listing(

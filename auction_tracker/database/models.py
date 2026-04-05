@@ -434,6 +434,28 @@ class ListingAttribute(Base):
 # ---------------------------------------------------------------------------
 
 
+class PipelineEvent(Base):
+  """Timestamped operational event emitted by the pipeline loops.
+
+  The web dashboard reads these to show search/fetch/watch progress,
+  error rates, per-website request counts, and time-series charts.
+  """
+
+  __tablename__ = "pipeline_events"
+  __table_args__ = (
+    Index("ix_pipeline_event_type_ts", "event_type", "timestamp"),
+    Index("ix_pipeline_event_website_ts", "website_name", "timestamp"),
+  )
+
+  id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+  timestamp: Mapped[datetime] = mapped_column(
+    DateTime, nullable=False, server_default=func.now(),
+  )
+  event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+  website_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+  detail_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class SearchQuery(Base):
   """A saved search that the tracker runs periodically to discover new
   listings across all enabled websites.
