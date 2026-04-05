@@ -700,7 +700,7 @@ async def _run_pipeline_async(
 
 @main.command("web")
 @click.option("--host", type=str, default="127.0.0.1", help="Bind address.")
-@click.option("--port", type=int, default=5000, help="Port to listen on.")
+@click.option("--port", type=int, default=5001, help="Port to listen on.")
 @click.option("--debug", is_flag=True, default=False, help="Enable Flask debug mode.")
 @pass_context
 def run_web(app: AppContext, host: str, port: int, debug: bool) -> None:
