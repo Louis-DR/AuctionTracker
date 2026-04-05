@@ -63,8 +63,14 @@ class TestScrapedModels:
 class TestParserRegistry:
 
   def setup_method(self):
-    # Clear the registry between tests.
+    # Save and clear the registry, restoring after each test to avoid
+    # breaking other test modules that check registration.
+    self._saved_parsers = dict(ParserRegistry._parsers)
     ParserRegistry._parsers.clear()
+
+  def teardown_method(self):
+    ParserRegistry._parsers.clear()
+    ParserRegistry._parsers.update(self._saved_parsers)
 
   def test_register_and_get(self):
     ParserRegistry.register(DummyParser)
