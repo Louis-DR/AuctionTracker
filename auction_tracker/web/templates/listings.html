@@ -423,16 +423,17 @@
     var context = document.getElementById("price-history-chart").getContext("2d");
     var chartInstance = null;
 
-    // Website color mapping.
+    // Website color mapping — keys match the lowercase names stored in the DB.
     var websiteColors = {
-      "eBay": "#d4af37",
-      "Drouot": "#dc2926",
-      "Catawiki": "#0033ff",
-      "LeBonCoin": "#ec5a13",
-      "Yahoo Japan": "#410093",
-      "Invaluable": "#636569",
-      "LiveAuctioneers": "#0097ba",
-      "Interencheres": "#17a2b8",
+      "ebay":           "#d4af37",
+      "catawiki":       "#0033ff",
+      "drouot":         "#dc2926",
+      "interencheres":  "#17a2b8",
+      "invaluable":     "#636569",
+      "liveauctioneers":"#0097ba",
+      "leboncoin":      "#ec5a13",
+      "yahoo_japan":    "#410093",
+      "gazette_drouot": "#8e44ad",
     };
 
     // Calculate min/max dates and prices from all data.

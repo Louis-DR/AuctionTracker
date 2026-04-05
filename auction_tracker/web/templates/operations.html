@@ -62,6 +62,22 @@
   white-space: nowrap;
 }
 
+/* Two-column chart grid on wide screens. */
+.chart-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+@media (min-width: 900px) {
+  .chart-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.chart-grid-item h2 {
+  margin-top: 0;
+}
+
 /* Live status section */
 .live-section {
   margin-bottom: 2rem;
@@ -315,20 +331,26 @@
   </article>
 </div>
 
-<!-- Requests per website chart -->
-<h2>Requests per Website (<span class="ops-hours-label-text">{{ hours_back }}</span>h)</h2>
-<div class="chart-container">
-  <canvas id="requestsChart" height="200"></canvas>
-</div>
-
-<!-- Time-series charts -->
-<h2>Activity Over Time</h2>
-<div class="chart-container">
-  <canvas id="activityChart" height="220"></canvas>
-</div>
-
-<div class="chart-container">
-  <canvas id="errorsChart" height="150"></canvas>
+<!-- Charts: two-column grid on wide screens -->
+<div class="chart-grid">
+  <div class="chart-grid-item">
+    <h2>Requests per Website (<span class="ops-hours-label-text">{{ hours_back }}</span>h)</h2>
+    <div class="chart-container">
+      <canvas id="requestsChart" height="220"></canvas>
+    </div>
+  </div>
+  <div class="chart-grid-item">
+    <h2>Activity Over Time</h2>
+    <div class="chart-container">
+      <canvas id="activityChart" height="220"></canvas>
+    </div>
+  </div>
+  <div class="chart-grid-item">
+    <h2>Errors Over Time</h2>
+    <div class="chart-container">
+      <canvas id="errorsChart" height="220"></canvas>
+    </div>
+  </div>
 </div>
 
 <!-- Upcoming auctions (ending soonest) -->
@@ -429,10 +451,24 @@
 // Constants & helpers
 // ---------------------------------------------------------------
 const HOURS_BACK = {{ hours_back }};
-const WEBSITE_COLORS = [
-  '#0074d9', '#2ecc40', '#ff4136', '#ff851b', '#b10dc9',
-  '#7c3aed', '#f59e0b', '#06b6d4', '#aaa', '#333',
+
+// Brand-accurate colors — keys match the lowercase website names in the DB.
+const WEBSITE_BRAND_COLORS = {
+  "ebay":           "#d4af37",
+  "catawiki":       "#0033ff",
+  "drouot":         "#dc2926",
+  "interencheres":  "#17a2b8",
+  "invaluable":     "#636569",
+  "liveauctioneers":"#0097ba",
+  "leboncoin":      "#ec5a13",
+  "yahoo_japan":    "#410093",
+  "gazette_drouot": "#8e44ad",
+};
+// Fallback palette for any unknown website.
+const FALLBACK_COLORS = [
+  '#06b6d4', '#f59e0b', '#7c3aed', '#2ecc40', '#aaa',
 ];
+const _fallbackIndex = {};
 
 function setText(id, value) {
   const el = document.getElementById(id);
@@ -475,14 +511,12 @@ function timeLeft(isoString) {
 // ---------------------------------------------------------------
 // Chart instances (created once, updated in-place)
 // ---------------------------------------------------------------
-const websiteColors = {};  // label -> stable color
-
 function getWebsiteColor(label) {
-  if (!websiteColors[label]) {
-    const keys = Object.keys(websiteColors);
-    websiteColors[label] = WEBSITE_COLORS[keys.length % WEBSITE_COLORS.length];
+  if (WEBSITE_BRAND_COLORS[label]) return WEBSITE_BRAND_COLORS[label];
+  if (!_fallbackIndex[label]) {
+    _fallbackIndex[label] = FALLBACK_COLORS[Object.keys(_fallbackIndex).length % FALLBACK_COLORS.length];
   }
-  return websiteColors[label];
+  return _fallbackIndex[label];
 }
 
 const initialWebsiteData = {{ website_request_counts|tojson_safe }};
