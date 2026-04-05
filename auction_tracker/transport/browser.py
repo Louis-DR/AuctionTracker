@@ -6,6 +6,7 @@ Designed to be simple and robust:
 - Hard timeouts on every operation
 - Clean startup and shutdown
 - Stealth patches to evade basic bot detection
+- Human-like mouse/scroll behavior to bypass DataDome fingerprinting
 - DataDome challenge detection and cookie consent dismissal
 """
 
@@ -14,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 import time
 from urllib.parse import urlparse
 
@@ -176,7 +178,7 @@ class BrowserTransport(Transport):
       await page.goto(homepage, wait_until="domcontentloaded", timeout=15_000)
       with contextlib.suppress(Exception):
         await page.wait_for_load_state("networkidle", timeout=5000)
-      await asyncio.sleep(1.5)
+      await self._simulate_human_behavior(page)
       await self._dismiss_cookie_consent(page)
       self._warmed_up_domains.add(domain)
       logger.debug("Warm-up complete for %s", domain)
@@ -184,6 +186,44 @@ class BrowserTransport(Transport):
       logger.warning("Homepage warm-up for %s failed: %s", domain, error)
       # Mark as done anyway so we don't keep retrying on every fetch.
       self._warmed_up_domains.add(domain)
+
+  @staticmethod
+  async def _simulate_human_behavior(page) -> None:
+    """Simulate realistic mouse movements and scrolling on the page.
+
+    DataDome and similar anti-bot systems analyse mouse movement
+    patterns, scroll behaviour, and interaction timing. A browser
+    that navigates without any pointer activity is a strong signal
+    of automation. This simulates a real user casually scanning a
+    page.
+    """
+    try:
+      await asyncio.sleep(random.uniform(0.3, 1.0))
+
+      for _ in range(random.randint(2, 4)):
+        target_x = random.randint(100, 900)
+        target_y = random.randint(100, 500)
+        await page.mouse.move(target_x, target_y, steps=random.randint(5, 15))
+        await asyncio.sleep(random.uniform(0.15, 0.4))
+
+      total_scroll = random.randint(200, 600)
+      scroll_steps = random.randint(2, 4)
+      for _ in range(scroll_steps):
+        scroll_amount = total_scroll // scroll_steps + random.randint(-30, 30)
+        await page.mouse.wheel(0, scroll_amount)
+        await asyncio.sleep(random.uniform(0.2, 0.5))
+
+      if random.random() > 0.4:
+        await page.mouse.wheel(0, -random.randint(50, 150))
+        await asyncio.sleep(random.uniform(0.1, 0.3))
+
+      await page.mouse.move(
+        random.randint(200, 700),
+        random.randint(150, 400),
+        steps=random.randint(5, 10),
+      )
+    except Exception:
+      pass
 
   async def _dismiss_cookie_consent(self, page) -> None:
     """Click common cookie consent buttons if present.
@@ -285,6 +325,11 @@ class BrowserTransport(Transport):
         # Wait for network to settle (helps with JS-rendered content).
         with contextlib.suppress(Exception):
           await page.wait_for_load_state("networkidle", timeout=5000)
+
+        # Simulate human interaction before anti-bot checks run their
+        # analysis. DataDome monitors pointer and scroll events, so a
+        # page without any mouse activity is flagged as automation.
+        await self._simulate_human_behavior(page)
 
         # Handle DataDome challenge regardless of HTTP status code.
         # A 403 from DataDome still delivers HTML that auto-resolves.

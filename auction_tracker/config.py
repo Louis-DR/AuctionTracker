@@ -205,14 +205,13 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     http_warm_up=True,
   ),
   "leboncoin": WebsiteConfig(
-    # Try curl_cffi first (TLS fingerprint impersonation); fall back to
-    # a non-headless browser when HTTP fails (DataDome may tighten over
-    # time). The browser fallback requires browser_headless=False in
-    # TransportConfig (the default) to reliably bypass DataDome.
-    transport=TransportKind.HTTP,
-    fallback_transport=TransportKind.BROWSER,
+    # DataDome blocks curl_cffi reliably, so use the visible browser
+    # directly (no HTTP-then-fallback). The non-headless browser with
+    # human-behavior simulation (mouse, scroll) is the only transport
+    # that works consistently against DataDome.
+    transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
-    request_delay=3.0,
+    request_delay=4.0,
   ),
   "drouot": WebsiteConfig(
     transport=TransportKind.HTTP,

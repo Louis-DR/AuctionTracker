@@ -59,8 +59,8 @@ class TestAppConfig:
     assert unknown.enabled is True
     assert unknown.transport == TransportKind.HTTP
 
-  def test_leboncoin_uses_http_with_browser_fallback(self):
+  def test_leboncoin_uses_browser_directly(self):
     config = AppConfig()
     leboncoin = config.website("leboncoin")
-    assert leboncoin.transport == TransportKind.HTTP
-    assert leboncoin.fallback_transport == TransportKind.BROWSER
+    assert leboncoin.transport == TransportKind.BROWSER
+    assert leboncoin.fallback_transport is None
