@@ -1,0 +1,974 @@
+{% extends "base.html" %}
+{% set active_page = "listings" %}
+{% block title %}Listings ({{ total_count }}) – AuctionTracker{% endblock %}
+
+{% block extra_css %}
+/* Checklist dropdown panels */
+.checklist-dropdown {
+  position: relative;
+  min-width: 140px;
+  flex: 1;
+}
+.checklist-dropdown summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 0.55em 0.75em;
+  border: 1px solid var(--pico-form-element-border-color);
+  border-radius: var(--pico-border-radius);
+  background: var(--pico-form-element-background-color);
+  font-size: 1rem;
+  line-height: 1.25;
+  height: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+  user-select: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.checklist-dropdown summary:hover {
+  border-color: var(--pico-primary);
+}
+.checklist-dropdown summary::-webkit-details-marker {
+  display: none;
+}
+.checklist-dropdown summary::after {
+  content: "▾";
+  font-size: 0.7em;
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+.checklist-dropdown[open] summary::after {
+  content: "▴";
+}
+.checklist-dropdown .checklist-panel {
+  position: absolute;
+  z-index: 100;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 2px;
+  padding: 0.5em;
+  background: var(--pico-card-background-color);
+  border: 1px solid var(--pico-form-element-border-color);
+  border-radius: var(--pico-border-radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  max-height: 280px;
+  overflow-y: auto;
+  min-width: 160px;
+}
+.checklist-panel label {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.25em 0.35em;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.88em;
+  white-space: nowrap;
+  margin-bottom: 0;
+}
+.checklist-panel label:hover {
+  background: var(--pico-table-row-stripped-background-color);
+}
+.checklist-panel input[type="checkbox"] {
+  margin: 0;
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+}
+.checklist-panel .checklist-actions {
+  display: flex;
+  gap: 0.5em;
+  padding-top: 0.4em;
+  margin-top: 0.3em;
+  border-top: 1px solid var(--pico-muted-border-color);
+  font-size: 0.8em;
+}
+.checklist-panel .checklist-actions a {
+  cursor: pointer;
+  text-decoration: none;
+  opacity: 0.7;
+}
+.checklist-panel .checklist-actions a:hover {
+  opacity: 1;
+}
+.summary-count {
+  font-size: 0.75em;
+  opacity: 0.5;
+  font-weight: normal;
+  white-space: nowrap;
+}
+/* Ensure all filter controls have consistent sizing */
+.filter-form input[type="search"],
+.filter-form select,
+.filter-form button {
+  margin-bottom: 0;
+}
+.filter-form .filter-group,
+.filter-form .filter-group-wide {
+  display: flex;
+  flex-direction: column;
+}
+{% endblock %}
+
+{% block content %}
+<hgroup>
+  <h1>Listings</h1>
+  <p>{{ total_count }} listing{{ "s" if total_count != 1 else "" }} found</p>
+</hgroup>
+
+{% if source_filter %}
+<article style="padding: 0.75rem 1rem; margin-bottom: 1rem;">
+  Filtered by search source: <strong>"{{ source_filter }}"</strong>
+  &mdash; <a href="/listings">clear filter</a>
+</article>
+{% endif %}
+
+<!-- Filters -->
+<form method="get" action="/listings" class="filter-form" id="filter-form">
+  <input type="hidden" name="_filtered" value="1">
+  {% if source_filter %}
+  <input type="hidden" name="source" value="{{ source_filter }}">
+  {% endif %}
+  <div class="filter-group-wide">
+    <input type="search" name="q" value="{{ search_query }}" placeholder="Search by title&hellip;">
+  </div>
+
+  <!-- Status checklist -->
+  <div class="filter-group">
+    <details class="checklist-dropdown" id="status-dropdown">
+      <summary>
+        Status
+        <span class="summary-count" id="status-count">
+          ({{ status_filters|length }}/{{ ListingStatus|list|length }})
+        </span>
+      </summary>
+      <div class="checklist-panel">
+        {% for status in ListingStatus %}
+        <label>
+          <input type="checkbox" name="status" value="{{ status.value }}"
+            {% if status.value in status_filters %}checked{% endif %}>
+          <span class="badge badge-{{ status.value }}">{{ status.value }}</span>
+        </label>
+        {% endfor %}
+        <div class="checklist-actions">
+          <a onclick="toggleAll(this, true)">All</a>
+          <a onclick="toggleAll(this, false)">None</a>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <!-- Website checklist -->
+  <div class="filter-group">
+    <details class="checklist-dropdown" id="website-dropdown">
+      <summary>
+        Website
+        <span class="summary-count" id="website-count">
+          {% if website_filters %}
+            ({{ website_filters|length }}/{{ websites|length }})
+          {% else %}
+            (all)
+          {% endif %}
+        </span>
+      </summary>
+      <div class="checklist-panel">
+        {% for website in websites %}
+        <label>
+          <input type="checkbox" name="website" value="{{ website.id }}"
+            {% if website.id|string in website_filters %}checked{% endif %}>
+          {{ website.name }}
+        </label>
+        {% endfor %}
+        <div class="checklist-actions">
+          <a onclick="toggleAll(this, true)">All</a>
+          <a onclick="toggleAll(this, false)">None</a>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <!-- Listing type (single select, kept as dropdown) -->
+  <div class="filter-group">
+    <select name="type">
+      <option value="">All types</option>
+      {% for listing_type in ListingType %}
+      <option value="{{ listing_type.value }}" {% if type_filter == listing_type.value %}selected{% endif %}>
+        {{ listing_type.value|capitalize }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <button type="submit">Filter</button>
+  </div>
+  {% if search_query or status_filters or website_filters or type_filter %}
+  <div>
+    <a href="/listings" role="button" class="outline secondary">Clear</a>
+  </div>
+  {% endif %}
+  <!-- Preserve sort -->
+  <input type="hidden" name="sort" value="{{ sort_by }}">
+  <input type="hidden" name="dir" value="{{ sort_dir }}">
+</form>
+
+<!-- Price history chart -->
+{% if price_history_data and (price_history_data.sold or price_history_data.active) %}
+<h2>Price History{% if search_query %} for "{{ search_query }}"{% endif %}</h2>
+
+<!-- Chart filters -->
+<div style="display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; padding: 1rem; background: var(--pico-card-background-color); border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius);">
+  <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+    <label for="chart-date-from" style="font-size: 0.85em; font-weight: 600;">Date From</label>
+    <input type="date" id="chart-date-from" style="margin-bottom: 0;">
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+    <label for="chart-date-to" style="font-size: 0.85em; font-weight: 600;">Date To</label>
+    <input type="date" id="chart-date-to" style="margin-bottom: 0;">
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+    <label for="chart-price-min" style="font-size: 0.85em; font-weight: 600;">Min Price (EUR)</label>
+    <input type="number" id="chart-price-min" step="0.01" min="0" placeholder="Min" style="margin-bottom: 0;">
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+    <label for="chart-price-max" style="font-size: 0.85em; font-weight: 600;">Max Price (EUR)</label>
+    <input type="number" id="chart-price-max" step="0.01" min="0" placeholder="Max" style="margin-bottom: 0;">
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 0.5rem; justify-content: flex-end;">
+    <button type="button" id="chart-reset-filters" style="margin-bottom: 0;">Reset</button>
+  </div>
+</div>
+
+<div class="chart-container" style="position: relative;">
+  <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+    <small class="muted">Scroll to zoom • Drag to select time range</small>
+    <button type="button" id="chart-reset-zoom" style="margin-bottom: 0; font-size: 0.85em;">Reset Zoom</button>
+  </div>
+  <canvas id="price-history-chart"></canvas>
+  <div id="chart-tooltip" style="position: absolute; background: rgba(0, 0, 0, 0.9); color: #fff; padding: 0.75rem; border-radius: 4px; pointer-events: none; display: none; z-index: 1000; max-width: 300px; font-size: 0.875rem; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);">
+    <div id="tooltip-image" style="margin-bottom: 0.5rem; text-align: center;">
+      <img id="tooltip-img" src="" alt="" style="max-width: 200px; max-height: 150px; border-radius: 4px; object-fit: contain;">
+    </div>
+    <div id="tooltip-title" style="font-weight: 600; margin-bottom: 0.25rem;"></div>
+    <div id="tooltip-date" style="opacity: 0.8; margin-bottom: 0.25rem;"></div>
+    <div id="tooltip-price" style="font-weight: 600; color: #4ade80;"></div>
+  </div>
+</div>
+
+<!-- Price distribution histogram -->
+{% if price_history_data and price_history_data.sold %}
+<h2>Price Distribution (Sold Items)</h2>
+<div class="chart-container">
+  <canvas id="price-histogram-chart"></canvas>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- Results table -->
+{% if listings %}
+<div style="overflow-x: auto;">
+  <table>
+    <thead>
+      <tr>
+        {% macro sort_header(column, label) %}
+        {% set new_dir = "asc" if (sort_by == column and sort_dir == "desc") else "desc" %}
+        <th>
+          <a href="?{{ filter_query_string }}&sort={{ column }}&dir={{ new_dir }}&page=1"
+             style="text-decoration: none; color: inherit;">
+            {{ label }}
+            {% if sort_by == column %}
+              {% if sort_dir == "asc" %} &#9650;{% else %} &#9660;{% endif %}
+            {% endif %}
+          </a>
+        </th>
+        {% endmacro %}
+        <th style="width: 80px;">Image</th>
+        {{ sort_header("title", "Title") }}
+        {{ sort_header("current_price", "Price") }}
+        {{ sort_header("bid_count", "Bids") }}
+        {{ sort_header("status", "Status") }}
+        <th>Type</th>
+        <th>Website</th>
+        {{ sort_header("end_time", "Ends") }}
+        {{ sort_header("created_at", "Added") }}
+      </tr>
+    </thead>
+    <tbody>
+      {% for listing in listings %}
+      <tr class="clickable-row" onclick="location.href='/listings/{{ listing.id }}'">
+        <td>
+          {% if listing.images %}
+            {% set img = listing.images[0] %}
+            {% if img.local_path %}
+               <img src="/images/{{ img.local_path }}" style="max-width: 60px; max-height: 60px; object-fit: contain; border-radius: 4px;">
+            {% else %}
+               <img src="{{ img.source_url }}" style="max-width: 60px; max-height: 60px; object-fit: contain; border-radius: 4px;">
+            {% endif %}
+          {% else %}
+            <span class="muted" style="display: inline-block; width: 60px; text-align: center; font-size: small;">No img</span>
+          {% endif %}
+        </td>
+        <td>{{ listing.title[:90] }}{% if listing.title|length > 90 %}&hellip;{% endif %}</td>
+        <td class="text-right no-wrap">
+          {% if listing.final_price is not none %}
+            {{ listing.final_price|format_price(listing.currency) }}
+            {% if listing.currency != "EUR" and listing.final_price_eur is not none %}
+              <br><span class="eur-hint">&asymp;&nbsp;{{ listing.final_price_eur|format_price("EUR") }}</span>
+            {% endif %}
+          {% elif listing.current_price is not none %}
+            {{ listing.current_price|format_price(listing.currency) }}
+            {% if listing.currency != "EUR" and listing.current_price_eur is not none %}
+              <br><span class="eur-hint">&asymp;&nbsp;{{ listing.current_price_eur|format_price("EUR") }}</span>
+            {% endif %}
+          {% else %}
+            &ndash;
+          {% endif %}
+        </td>
+        <td class="text-right">{{ listing.bid_count }}</td>
+        <td><span class="badge badge-{{ listing.status.value }}">{{ listing.status.value }}</span></td>
+        <td><span class="badge badge-{{ listing.listing_type.value }}">{{ listing.listing_type.value }}</span></td>
+        <td>{{ listing.website.name if listing.website else "?" }}</td>
+        <td class="no-wrap">{{ listing.end_time|format_datetime }}</td>
+        <td class="no-wrap">{{ listing.created_at|format_datetime }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<div class="pagination">
+  {% if page > 1 %}
+  <a href="?{{ filter_query_string }}&sort={{ sort_by }}&dir={{ sort_dir }}&page={{ page - 1 }}">&laquo; Prev</a>
+  {% endif %}
+
+  {% for page_number in range(1, total_pages + 1) %}
+    {% if page_number == page %}
+      <span class="current-page">{{ page_number }}</span>
+    {% elif (page_number - page)|abs <= 3 or page_number == 1 or page_number == total_pages %}
+      <a href="?{{ filter_query_string }}&sort={{ sort_by }}&dir={{ sort_dir }}&page={{ page_number }}">{{ page_number }}</a>
+    {% elif (page_number - page)|abs == 4 %}
+      <span class="muted">&hellip;</span>
+    {% endif %}
+  {% endfor %}
+
+  {% if page < total_pages %}
+  <a href="?{{ filter_query_string }}&sort={{ sort_by }}&dir={{ sort_dir }}&page={{ page + 1 }}">Next &raquo;</a>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<p class="muted">No listings match your filters.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Toggle all checkboxes in a checklist panel.
+  function toggleAll(link, checked) {
+    var panel = link.closest('.checklist-panel');
+    panel.querySelectorAll('input[type="checkbox"]').forEach(function(checkbox) {
+      checkbox.checked = checked;
+    });
+    updateCounts();
+  }
+
+  // Update the summary counts when checkboxes change.
+  function updateCounts() {
+    document.querySelectorAll('.checklist-dropdown').forEach(function(dropdown) {
+      var checkboxes = dropdown.querySelectorAll('input[type="checkbox"]');
+      var checked = dropdown.querySelectorAll('input[type="checkbox"]:checked');
+      var countSpan = dropdown.querySelector('.summary-count');
+      if (countSpan) {
+        if (checked.length === checkboxes.length) {
+          countSpan.textContent = '(all)';
+        } else if (checked.length === 0) {
+          countSpan.textContent = '(none)';
+        } else {
+          countSpan.textContent = '(' + checked.length + '/' + checkboxes.length + ')';
+        }
+      }
+    });
+  }
+
+  // Listen for checkbox changes.
+  document.querySelectorAll('.checklist-panel input[type="checkbox"]').forEach(function(checkbox) {
+    checkbox.addEventListener('change', updateCounts);
+  });
+
+  // Close dropdown when clicking outside.
+  document.addEventListener('click', function(event) {
+    document.querySelectorAll('.checklist-dropdown[open]').forEach(function(dropdown) {
+      if (!dropdown.contains(event.target)) {
+        dropdown.removeAttribute('open');
+      }
+    });
+  });
+
+  // Run counts on page load.
+  updateCounts();
+</script>
+
+{% if price_history_data and (price_history_data.sold or price_history_data.active) %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+<script>
+  (function() {
+    var priceHistoryData = {{ price_history_data|tojson_safe }};
+    var context = document.getElementById("price-history-chart").getContext("2d");
+    var chartInstance = null;
+
+    // Website color mapping.
+    var websiteColors = {
+      "eBay": "#d4af37",
+      "Drouot": "#dc2926",
+      "Catawiki": "#0033ff",
+      "LeBonCoin": "#ec5a13",
+      "Yahoo Japan": "#410093",
+      "Invaluable": "#636569",
+      "LiveAuctioneers": "#0097ba",
+      "Interencheres": "#17a2b8",
+    };
+
+    // Calculate min/max dates and prices from all data.
+    var allPoints = priceHistoryData.sold.concat(priceHistoryData.active);
+    var minDate = null;
+    var maxDate = null;
+    var minPrice = null;
+    var maxPrice = null;
+
+    allPoints.forEach(function(point) {
+      var pointDate = new Date(point.x);
+      if (minDate === null || pointDate < minDate) {
+        minDate = pointDate;
+      }
+      if (maxDate === null || pointDate > maxDate) {
+        maxDate = pointDate;
+      }
+      if (minPrice === null || point.y < minPrice) {
+        minPrice = point.y;
+      }
+      if (maxPrice === null || point.y > maxPrice) {
+        maxPrice = point.y;
+      }
+    });
+
+    // Initialize filter inputs with default values.
+    var dateFromInput = document.getElementById("chart-date-from");
+    var dateToInput = document.getElementById("chart-date-to");
+    var priceMinInput = document.getElementById("chart-price-min");
+    var priceMaxInput = document.getElementById("chart-price-max");
+    var resetButton = document.getElementById("chart-reset-filters");
+
+    // Format dates for input fields (YYYY-MM-DD).
+    function formatDateForInput(date) {
+      var year = date.getFullYear();
+      var month = String(date.getMonth() + 1).padStart(2, "0");
+      var day = String(date.getDate()).padStart(2, "0");
+      return year + "-" + month + "-" + day;
+    }
+
+    // Set default values.
+    dateFromInput.value = formatDateForInput(minDate);
+    dateToInput.value = formatDateForInput(maxDate);
+    priceMinInput.placeholder = minPrice.toFixed(2);
+    priceMaxInput.placeholder = maxPrice.toFixed(2);
+
+    // Filter data based on current filter values.
+    function filterData() {
+      var dateFrom = dateFromInput.value ? new Date(dateFromInput.value) : null;
+      var dateTo = dateToInput.value ? new Date(dateToInput.value + "T23:59:59") : null;
+      var priceMin = priceMinInput.value ? parseFloat(priceMinInput.value) : null;
+      var priceMax = priceMaxInput.value ? parseFloat(priceMaxInput.value) : null;
+
+      var filteredSold = priceHistoryData.sold.filter(function(point) {
+        var pointDate = new Date(point.x);
+        if (dateFrom && pointDate < dateFrom) return false;
+        if (dateTo && pointDate > dateTo) return false;
+        if (priceMin !== null && point.y < priceMin) return false;
+        if (priceMax !== null && point.y > priceMax) return false;
+        return true;
+      });
+
+      var filteredActive = priceHistoryData.active.filter(function(point) {
+        var pointDate = new Date(point.x);
+        if (dateFrom && pointDate < dateFrom) return false;
+        if (dateTo && pointDate > dateTo) return false;
+        if (priceMin !== null && point.y < priceMin) return false;
+        if (priceMax !== null && point.y > priceMax) return false;
+        return true;
+      });
+
+      return {
+        sold: filteredSold,
+        active: filteredActive,
+      };
+    }
+
+    // Update chart with filtered data.
+    function updateChart() {
+      var filteredData = filterData();
+
+      // Group sold data by website.
+      var soldByWebsite = {};
+      filteredData.sold.forEach(function(point) {
+        var websiteName = point.website;
+        if (!soldByWebsite[websiteName]) {
+          soldByWebsite[websiteName] = [];
+        }
+        soldByWebsite[websiteName].push({
+          x: point.x,
+          y: point.y,
+          title: point.title,
+          listing_id: point.listing_id,
+          image_url: point.image_url,
+        });
+      });
+
+      // Group active data by website.
+      var activeByWebsite = {};
+      filteredData.active.forEach(function(point) {
+        var websiteName = point.website;
+        if (!activeByWebsite[websiteName]) {
+          activeByWebsite[websiteName] = [];
+        }
+        activeByWebsite[websiteName].push({
+          x: point.x,
+          y: point.y,
+          title: point.title,
+          listing_id: point.listing_id,
+          image_url: point.image_url,
+        });
+      });
+
+    // Build datasets: one per website for sold listings.
+    var datasets = [];
+    Object.keys(soldByWebsite).sort().forEach(function(websiteName) {
+      var color = websiteColors[websiteName] || "#6c757d";
+      datasets.push({
+        label: websiteName + " (sold)",
+        data: soldByWebsite[websiteName],
+        borderColor: color,
+        backgroundColor: color,
+        pointRadius: 8,
+        pointHoverRadius: 10,
+        pointBackgroundColor: color,
+        pointBorderColor: "#fff",
+        pointBorderWidth: 1,
+        showLine: false,
+      });
+    });
+
+    // Add active listings datasets (shown on the right side).
+    Object.keys(activeByWebsite).sort().forEach(function(websiteName) {
+      var color = websiteColors[websiteName] || "#6c757d";
+      datasets.push({
+        label: websiteName + " (active)",
+        data: activeByWebsite[websiteName],
+        borderColor: color,
+        backgroundColor: color,
+        pointRadius: 6,
+        pointHoverRadius: 10,
+        pointBackgroundColor: color,
+        pointBorderColor: "#fff",
+        pointBorderWidth: 1,
+        pointStyle: "triangle",
+        showLine: false,
+      });
+    });
+
+      // Destroy existing chart if it exists.
+      if (chartInstance) {
+        chartInstance.destroy();
+      }
+
+      // Create new chart.
+      chartInstance = new Chart(context, {
+      type: "scatter",
+      data: {
+        datasets: datasets,
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          tooltip: {
+            enabled: false,
+            external: function(context) {
+              var tooltipEl = document.getElementById("chart-tooltip");
+              if (!tooltipEl) {
+                return;
+              }
+
+              if (context.tooltip.opacity === 0) {
+                tooltipEl.style.display = "none";
+                return;
+              }
+
+              var tooltipModel = context.tooltip;
+              var point = tooltipModel.dataPoints[0].raw;
+
+              // Update tooltip content.
+              var titleEl = document.getElementById("tooltip-title");
+              var dateEl = document.getElementById("tooltip-date");
+              var priceEl = document.getElementById("tooltip-price");
+              var imageContainer = document.getElementById("tooltip-image");
+              var imageEl = document.getElementById("tooltip-img");
+
+              if (titleEl) {
+                titleEl.textContent = point.title;
+              }
+              if (dateEl) {
+                dateEl.textContent = new Date(point.x).toLocaleDateString();
+              }
+              if (priceEl) {
+                priceEl.textContent = point.y.toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                }) + " EUR";
+              }
+
+              // Show/hide image.
+              if (point.image_url && imageEl && imageContainer) {
+                imageEl.src = point.image_url;
+                imageEl.onerror = function() {
+                  imageContainer.style.display = "none";
+                };
+                imageContainer.style.display = "block";
+              } else if (imageContainer) {
+                imageContainer.style.display = "none";
+              }
+
+              // Position tooltip.
+              var position = context.chart.canvas.getBoundingClientRect();
+              tooltipEl.style.display = "block";
+              
+              // Position relative to the chart container.
+              var chartContainer = context.chart.canvas.parentElement;
+              var containerRect = chartContainer.getBoundingClientRect();
+              
+              var left = tooltipModel.caretX + 10;
+              var top = tooltipModel.caretY - 10;
+              
+              tooltipEl.style.left = left + "px";
+              tooltipEl.style.top = top + "px";
+
+              // Adjust position to keep tooltip in viewport.
+              setTimeout(function() {
+                var tooltipRect = tooltipEl.getBoundingClientRect();
+                var containerRect = chartContainer.getBoundingClientRect();
+                
+                if (tooltipRect.right > containerRect.right) {
+                  tooltipEl.style.left = (tooltipModel.caretX - tooltipRect.width - 10) + "px";
+                }
+                if (tooltipRect.bottom > containerRect.bottom) {
+                  tooltipEl.style.top = (tooltipModel.caretY - tooltipRect.height - 10) + "px";
+                }
+                if (parseInt(tooltipEl.style.left) < 0) {
+                  tooltipEl.style.left = "10px";
+                }
+                if (parseInt(tooltipEl.style.top) < 0) {
+                  tooltipEl.style.top = "10px";
+                }
+              }, 0);
+            },
+          },
+          legend: {
+            display: true,
+            position: "top",
+          },
+          zoom: {
+            zoom: {
+              wheel: {
+                enabled: true,
+                speed: 0.1,
+              },
+              pinch: {
+                enabled: true,
+              },
+              drag: {
+                enabled: true,
+                modifierKey: null,
+              },
+              mode: "x",
+            },
+            pan: {
+              enabled: true,
+              mode: "x",
+              modifierKey: "shift",
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: "time",
+            time: {
+              tooltipFormat: "PPpp",
+              displayFormats: {
+                minute: "MMM d, HH:mm",
+                hour: "MMM d, HH:mm",
+                day: "MMM d",
+                week: "MMM d",
+                month: "MMM yyyy",
+              },
+            },
+            title: {
+              display: true,
+              text: "Date",
+            },
+            ticks: {
+              maxRotation: 45,
+            },
+          },
+          y: {
+            beginAtZero: false,
+            title: {
+              display: true,
+              text: "Total Buyer Cost (EUR)",
+            },
+            ticks: {
+              callback: function(value) {
+                return value.toLocaleString();
+              },
+            },
+          },
+        },
+        onClick: function(event, elements) {
+          if (elements.length > 0) {
+            var datasetIndex = elements[0].datasetIndex;
+            var pointIndex = elements[0].index;
+            var dataset = this.data.datasets[datasetIndex];
+            var point = dataset.data[pointIndex];
+            if (point.listing_id) {
+              window.open("/listings/" + point.listing_id, "_blank");
+            }
+          }
+        },
+      },
+    });
+    }
+
+    // Set up event listeners for filter inputs.
+    dateFromInput.addEventListener("change", updateChart);
+    dateToInput.addEventListener("change", updateChart);
+    priceMinInput.addEventListener("input", updateChart);
+    priceMaxInput.addEventListener("input", updateChart);
+
+    // Reset button handler.
+    resetButton.addEventListener("click", function() {
+      dateFromInput.value = formatDateForInput(minDate);
+      dateToInput.value = formatDateForInput(maxDate);
+      priceMinInput.value = "";
+      priceMaxInput.value = "";
+      updateChart();
+    });
+
+    // Reset zoom button handler.
+    var resetZoomButton = document.getElementById("chart-reset-zoom");
+    resetZoomButton.addEventListener("click", function() {
+      if (chartInstance) {
+        chartInstance.resetZoom();
+      }
+    });
+
+    // Initial chart render.
+    updateChart();
+
+    // Histogram chart for sold items price distribution.
+    var histogramContext = null;
+    var histogramInstance = null;
+    if (document.getElementById("price-histogram-chart")) {
+      histogramContext = document.getElementById("price-histogram-chart").getContext("2d");
+
+      // Calculate histogram bins with outlier handling.
+      function calculateHistogramBins(prices) {
+        if (prices.length === 0) {
+          return { bins: [], labels: [] };
+        }
+
+        // Sort prices.
+        var sortedPrices = prices.slice().sort(function(a, b) { return a - b; });
+
+        // Calculate quartiles for outlier detection.
+        var q1Index = Math.floor(sortedPrices.length * 0.25);
+        var q3Index = Math.floor(sortedPrices.length * 0.75);
+        var q1 = sortedPrices[q1Index];
+        var q3 = sortedPrices[q3Index];
+        var iqr = q3 - q1;
+        var lowerBound = q1 - 1.5 * iqr;
+        var upperBound = q3 + 1.5 * iqr;
+
+        // Separate outliers from main distribution.
+        var mainPrices = sortedPrices.filter(function(p) {
+          return p >= lowerBound && p <= upperBound;
+        });
+        var lowerOutliers = sortedPrices.filter(function(p) {
+          return p < lowerBound;
+        });
+        var upperOutliers = sortedPrices.filter(function(p) {
+          return p > upperBound;
+        });
+
+        // Number of bins scales with sample size for higher resolution.
+        var sampleSize = mainPrices.length;
+        var numBins = Math.ceil(2 * Math.sqrt(sampleSize));
+        numBins = Math.min(Math.max(numBins, 15), 60); // Between 15 and 60 bins.
+        var mainMin = mainPrices.length > 0 ? mainPrices[0] : 0;
+        var mainMax = mainPrices.length > 0 ? mainPrices[mainPrices.length - 1] : 0;
+        var range = mainMax - mainMin;
+        var rawBinWidth = range / numBins;
+
+        // Round bin width to a nice number.
+        var magnitude = Math.pow(10, Math.floor(Math.log10(rawBinWidth)));
+        var normalized = rawBinWidth / magnitude;
+        var niceBinWidth;
+        if (normalized <= 1) {
+          niceBinWidth = magnitude;
+        } else if (normalized <= 2) {
+          niceBinWidth = 2 * magnitude;
+        } else if (normalized <= 5) {
+          niceBinWidth = 5 * magnitude;
+        } else {
+          niceBinWidth = 10 * magnitude;
+        }
+
+        // Create bins.
+        var bins = [];
+        var labels = [];
+
+        // Lower outliers bin.
+        if (lowerOutliers.length > 0) {
+          var lowerOutlierMin = lowerOutliers[0];
+          var lowerOutlierMax = lowerOutliers[lowerOutliers.length - 1];
+          bins.push(lowerOutliers.length);
+          labels.push("< " + lowerBound.toFixed(0));
+        }
+
+        // Main distribution bins.
+        var binStart = Math.floor(mainMin / niceBinWidth) * niceBinWidth;
+        var binEnd = binStart + niceBinWidth;
+        var binIndex = 0;
+
+        while (binStart <= mainMax) {
+          var count = mainPrices.filter(function(p) {
+            return p >= binStart && p < binEnd;
+          }).length;
+          // Handle the last bin inclusively.
+          if (binEnd > mainMax && binStart <= mainMax) {
+            count = mainPrices.filter(function(p) {
+              return p >= binStart;
+            }).length;
+          }
+          bins.push(count);
+          labels.push(binStart.toFixed(0) + " - " + binEnd.toFixed(0));
+          binStart = binEnd;
+          binEnd += niceBinWidth;
+          binIndex++;
+        }
+
+        // Upper outliers bin.
+        if (upperOutliers.length > 0) {
+          bins.push(upperOutliers.length);
+          labels.push("> " + upperBound.toFixed(0));
+        }
+
+        return { bins: bins, labels: labels };
+      }
+
+      // Update histogram chart.
+      function updateHistogram() {
+        var filteredData = filterData();
+        var soldPrices = filteredData.sold.map(function(point) {
+          return point.y;
+        });
+
+        if (soldPrices.length === 0) {
+          if (histogramInstance) {
+            histogramInstance.destroy();
+            histogramInstance = null;
+          }
+          return;
+        }
+
+        var histogramData = calculateHistogramBins(soldPrices);
+
+        // Destroy existing chart if it exists.
+        if (histogramInstance) {
+          histogramInstance.destroy();
+        }
+
+        // Create new histogram chart.
+        histogramInstance = new Chart(histogramContext, {
+          type: "bar",
+          data: {
+            labels: histogramData.labels,
+            datasets: [{
+              label: "Number of Sales",
+              data: histogramData.bins,
+              backgroundColor: "rgba(0, 116, 217, 0.6)",
+              borderColor: "#0074d9",
+              borderWidth: 1,
+              barPercentage: 1,
+              categoryPercentage: 1,
+            }]
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  title: function(tooltipItems) {
+                    return tooltipItems[0].label;
+                  },
+                  label: function(context) {
+                    return context.parsed.y + " sale" + (context.parsed.y !== 1 ? "s" : "");
+                  },
+                },
+              },
+              legend: {
+                display: false,
+              },
+            },
+            scales: {
+              x: {
+                title: {
+                  display: true,
+                  text: "Price Range (EUR)",
+                },
+                ticks: {
+                  maxRotation: 45,
+                  minRotation: 45,
+                },
+              },
+              y: {
+                beginAtZero: true,
+                title: {
+                  display: true,
+                  text: "Number of Sales",
+                },
+                ticks: {
+                  stepSize: 1,
+                },
+              },
+            },
+          },
+        });
+      }
+
+      // Update histogram when filters change.
+      dateFromInput.addEventListener("change", updateHistogram);
+      dateToInput.addEventListener("change", updateHistogram);
+      priceMinInput.addEventListener("input", updateHistogram);
+      priceMaxInput.addEventListener("input", updateHistogram);
+
+      // Initial histogram render.
+      updateHistogram();
+    }
+  })();
+</script>
+{% endif %}
+{% endblock %}

@@ -28,7 +28,7 @@ class DummyParser(Parser):
       )
     ]
 
-  def parse_listing(self, html: str) -> ScrapedListing:
+  def parse_listing(self, html: str, url: str = "") -> ScrapedListing:
     return ScrapedListing(
       external_id="1", url="https://dummy.com/1", title="Test Item",
       current_price=Decimal("42.00"), currency="EUR",

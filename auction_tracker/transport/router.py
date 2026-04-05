@@ -46,19 +46,18 @@ class TransportRouter:
       retry_backoff_factor=transport_config.retry_backoff_factor,
     )
     await self._http.start()
+    # Browser transport is started lazily on first use.
 
-    needs_browser = any(
-      website_config.transport == TransportKind.BROWSER
-      or website_config.fallback_transport == TransportKind.BROWSER
-      for website_config in self._config.websites.values()
-      if website_config.enabled
-    )
-    if needs_browser:
+  async def _ensure_browser(self) -> BrowserTransport:
+    """Start the browser transport on first use."""
+    if self._browser is None:
+      transport_config = self._config.transport
       self._browser = BrowserTransport(
         max_pages=transport_config.browser_page_limit,
         timeout=transport_config.default_timeout,
       )
       await self._browser.start()
+    return self._browser
 
   async def stop(self) -> None:
     if self._http is not None:
@@ -81,23 +80,25 @@ class TransportRouter:
       if self._http is None:
         raise RuntimeError("HTTP transport not initialized")
       return self._http
-    if kind == TransportKind.BROWSER:
-      if self._browser is None:
-        raise RuntimeError(
-          "Browser transport not initialized. "
-          "Install playwright: pip install 'auction-tracker[browser]'"
-        )
-      return self._browser
     raise ValueError(f"Unknown transport kind: {kind}")
+
+  async def _get_transport_async(self, kind: TransportKind) -> Transport:
+    """Return the transport for kind, starting the browser lazily if needed."""
+    if kind == TransportKind.BROWSER:
+      return await self._ensure_browser()
+    return self._get_transport(kind)
 
   async def fetch(self, website_name: str, url: str, **kwargs) -> FetchResult:
     """Fetch a URL using the transport configured for the given website.
+
+    The browser transport is started lazily on first use, so HTTP-only
+    commands (e.g. fetching an eBay listing) never launch a browser.
 
     If the primary transport raises TransportBlocked and a fallback
     is configured, retries with the fallback transport.
     """
     website_config = self._config.website(website_name)
-    primary = self._get_transport(website_config.transport)
+    primary = await self._get_transport_async(website_config.transport)
 
     try:
       return await primary.fetch(url, **kwargs)
@@ -109,7 +110,7 @@ class TransportRouter:
           primary.name, url, website_name,
           website_config.fallback_transport.value,
         )
-        fallback = self._get_transport(website_config.fallback_transport)
+        fallback = await self._get_transport_async(website_config.fallback_transport)
         return await fallback.fetch(url, **kwargs)
       raise
     except TransportError:
@@ -120,6 +121,6 @@ class TransportRouter:
           primary.name, url, website_name,
           website_config.fallback_transport.value,
         )
-        fallback = self._get_transport(website_config.fallback_transport)
+        fallback = await self._get_transport_async(website_config.fallback_transport)
         return await fallback.fetch(url, **kwargs)
       raise

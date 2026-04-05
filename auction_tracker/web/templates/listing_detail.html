@@ -1,0 +1,770 @@
+{% extends "base.html" %}
+{% set active_page = "listings" %}
+{% block title %}{{ listing.title }} – AuctionTracker{% endblock %}
+
+{% block extra_css %}
+/* Tabs */
+.tabs {
+display: flex;
+gap: 0;
+border-bottom: 2px solid var(--pico-muted-border-color);
+margin-bottom: 0;
+}
+.tabs button {
+background: none;
+border: none;
+padding: 0.6em 1.2em;
+cursor: pointer;
+font-weight: 600;
+font-size: 0.92em;
+color: var(--pico-muted-color);
+border-bottom: 2px solid transparent;
+margin-bottom: -2px;
+transition: color 0.15s, border-color 0.15s;
+}
+.tabs button:hover {
+color: var(--pico-primary);
+}
+.tabs button.active {
+color: var(--pico-primary);
+border-bottom-color: var(--pico-primary);
+}
+.tab-panel {
+display: none;
+}
+.tab-panel.active {
+display: block;
+}
+
+/* Bid table */
+.bid-table-container {
+max-height: 28rem;
+overflow-y: auto;
+}
+.bid-table-container table {
+margin-bottom: 0;
+}
+.country-flag {
+display: inline-block;
+font-size: 0.85em;
+margin-right: 0.3em;
+opacity: 0.85;
+}
+.autobid-badge {
+display: inline-block;
+padding: 0.1em 0.4em;
+border-radius: 0.25em;
+font-size: 0.72em;
+font-weight: 600;
+background: #f59e0b;
+color: #fff;
+vertical-align: middle;
+margin-left: 0.3em;
+}
+.price-eur {
+font-size: 1.1em;
+color: var(--pico-muted-color);
+margin-top: -0.4em;
+margin-bottom: 0.4em;
+}
+.eur-hint {
+font-size: 0.82em;
+color: var(--pico-muted-color);
+opacity: 0.8;
+}
+{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<p><a href="/listings">&larr; Back to listings</a></p>
+
+<!-- Title and badges -->
+<hgroup>
+  <h1>{{ listing.title }}</h1>
+  <p>
+    <span class="badge badge-{{ listing.status.value }}">{{ listing.status.value }}</span>
+    <span class="badge badge-{{ listing.listing_type.value }}">{{ listing.listing_type.value }}</span>
+    {% if listing.condition and listing.condition.value != "unknown" %}
+    <span class="badge" style="background: #6c757d; color: #fff;">{{ listing.condition.value|replace("_", " ")|title
+      }}</span>
+    {% endif %}
+    &nbsp;&middot;&nbsp;
+    <strong>{{ listing.website.name if listing.website else "?" }}</strong>
+    {% if listing.lot_number %}
+    &nbsp;&middot;&nbsp; Lot #{{ listing.lot_number }}
+    {% endif %}
+  </p>
+</hgroup>
+
+<!-- Image gallery -->
+{% if listing.images %}
+<h2>Photos ({{ listing.images|length }})</h2>
+<div class="image-gallery">
+  {% for image in listing.images %}
+  <img src="{% if image.local_path %}/images/{{ image.local_path }}{% else %}{{ image.source_url }}{% endif %}"
+    alt="Image {{ image.position + 1 }}" loading="lazy" onclick="openLightbox(this.src)">
+  {% endfor %}
+</div>
+
+<!-- Lightbox -->
+<dialog class="lightbox" id="lightbox" onclick="this.close()">
+  <img id="lightbox-image" src="" alt="Full size image">
+</dialog>
+{% endif %}
+
+<!-- Price and seller info (two columns) -->
+<div class="info-grid">
+  <!-- Price information -->
+  <article>
+    <header><strong>Price Information</strong></header>
+
+    {% set display_price = listing.final_price or listing.current_price %}
+    {% if display_price is not none %}
+    <p class="price-big">{{ display_price|format_price(listing.currency) }}</p>
+    {% if listing.currency != "EUR" %}
+    {% set eur_price = listing.final_price_eur or listing.current_price_eur %}
+    {% if eur_price is not none %}
+    <p class="price-eur">&asymp;&nbsp;{{ eur_price|format_price("EUR") }}</p>
+    {% endif %}
+    {% endif %}
+    {% if listing.final_price is not none %}
+    <p class="muted">Final price (sold)</p>
+    {% else %}
+    <p class="muted">Current price</p>
+    {% endif %}
+    {% endif %}
+
+    <table>
+      <tbody>
+        {% if listing.starting_price is not none %}
+        <tr>
+          <td>Starting price</td>
+          <td class="text-right">{{ listing.starting_price|format_price(listing.currency) }}</td>
+        </tr>
+        {% endif %}
+        {% if listing.reserve_price is not none %}
+        <tr>
+          <td>Reserve price</td>
+          <td class="text-right">{{ listing.reserve_price|format_price(listing.currency) }}</td>
+        </tr>
+        {% endif %}
+        {% if listing.buy_now_price is not none %}
+        <tr>
+          <td>Buy now price</td>
+          <td class="text-right">{{ listing.buy_now_price|format_price(listing.currency) }}</td>
+        </tr>
+        {% endif %}
+        {% if listing.estimate_low is not none or listing.estimate_high is not none %}
+        <tr>
+          <td>Estimate</td>
+          <td class="text-right">
+            {{ listing.estimate_low|format_price(listing.currency) }}
+            &ndash;
+            {{ listing.estimate_high|format_price(listing.currency) }}
+          </td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+
+    <table class="mt-1">
+      <tbody>
+        {% if listing.effective_buyer_premium_percent is not none %}
+        <tr>
+          <td>Buyer premium</td>
+          <td class="text-right">{{ listing.effective_buyer_premium_percent }}%</td>
+        </tr>
+        {% endif %}
+        {% if listing.effective_buyer_premium_fixed is not none %}
+        <tr>
+          <td>Fixed fee</td>
+          <td class="text-right">{{ listing.effective_buyer_premium_fixed|format_price(listing.currency) }}</td>
+        </tr>
+        {% endif %}
+        {% if listing.shipping_cost is not none %}
+        <tr>
+          <td>Shipping</td>
+          <td class="text-right">{{ listing.shipping_cost|format_price(listing.currency) }}</td>
+        </tr>
+        {% endif %}
+        {% if listing.total_buyer_cost is not none %}
+        <tr>
+          <td><strong>Total buyer cost</strong></td>
+          <td class="text-right"><strong>{{ listing.total_buyer_cost|format_price(listing.currency) }}</strong></td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+
+    <table class="mt-1">
+      <tbody>
+        <tr>
+          <td>Bids</td>
+          <td class="text-right">{{ listing.bid_count }}</td>
+        </tr>
+        {% if listing.watcher_count is not none %}
+        <tr>
+          <td>Watchers</td>
+          <td class="text-right">{{ listing.watcher_count }}</td>
+        </tr>
+        {% endif %}
+        {% if listing.view_count is not none %}
+        <tr>
+          <td>Views</td>
+          <td class="text-right">{{ listing.view_count }}</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </article>
+
+  <!-- Seller and timing info -->
+  <article>
+    <header><strong>Seller &amp; Timing</strong></header>
+
+    {% if listing.seller %}
+    <table>
+      <tbody>
+        <tr>
+          <td>Seller</td>
+          <td class="text-right">
+            <a href="/sellers/{{ listing.seller.id }}">
+              {{ listing.seller.display_name or listing.seller.username }}
+            </a>
+          </td>
+        </tr>
+        {% if listing.seller.country %}
+        <tr>
+          <td>Country</td>
+          <td class="text-right">{{ listing.seller.country }}</td>
+        </tr>
+        {% endif %}
+        {% if listing.seller.rating is not none %}
+        <tr>
+          <td>Rating</td>
+          <td class="text-right">{{ "%.1f"|format(listing.seller.rating) }} &#9733;</td>
+        </tr>
+        {% endif %}
+        {% if listing.seller.feedback_count is not none %}
+        <tr>
+          <td>Feedback</td>
+          <td class="text-right">{{ listing.seller.feedback_count }}</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if listing.shipping_from_country %}
+    <table class="mt-1">
+      <tbody>
+        <tr>
+          <td>Ships from</td>
+          <td class="text-right">{{ listing.shipping_from_country }}</td>
+        </tr>
+        {% if listing.ships_internationally is not none %}
+        <tr>
+          <td>International</td>
+          <td class="text-right">{{ "Yes" if listing.ships_internationally else "No" }}</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <table class="mt-1">
+      <tbody>
+        {% if listing.start_time %}
+        <tr>
+          <td>Starts</td>
+          <td class="text-right no-wrap">{{ listing.start_time|format_datetime }}</td>
+        </tr>
+        {% endif %}
+        {% if listing.end_time %}
+        <tr>
+          <td>Ends</td>
+          <td class="text-right no-wrap">{{ listing.end_time|format_datetime }}</td>
+        </tr>
+        {% endif %}
+        <tr>
+          <td>First seen</td>
+          <td class="text-right no-wrap">{{ listing.first_seen_at|format_datetime }}</td>
+        </tr>
+        <tr>
+          <td>Last checked</td>
+          <td class="text-right no-wrap">{{ listing.last_checked_at|format_datetime }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    {% if listing.auction_house_name or listing.sale_name %}
+    <table class="mt-1">
+      <tbody>
+        {% if listing.auction_house_name %}
+        <tr>
+          <td>Auction house</td>
+          <td class="text-right">{{ listing.auction_house_name }}</td>
+        </tr>
+        {% endif %}
+        {% if listing.sale_name %}
+        <tr>
+          <td>Sale</td>
+          <td class="text-right">{{ listing.sale_name }}</td>
+        </tr>
+        {% endif %}
+        {% if listing.sale_date %}
+        <tr>
+          <td>Sale date</td>
+          <td class="text-right">{{ listing.sale_date|format_date }}</td>
+        </tr>
+        {% endif %}
+      </tbody>
+    </table>
+    {% endif %}
+  </article>
+</div>
+
+<!-- Source Searches -->
+{% if source_searches %}
+<h2>Source Searches</h2>
+<article>
+  <p>This listing was discovered by the following search queries:</p>
+  <ul>
+    {% for query_text in source_searches %}
+    <li><strong>{{ query_text }}</strong></li>
+    {% endfor %}
+  </ul>
+</article>
+{% endif %}
+
+<!-- Attributes -->
+{% if attributes %}
+<h2>Attributes</h2>
+<article>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Value</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for attribute in attributes %}
+      <tr>
+        <td><strong>{{ attribute.name }}</strong></td>
+        <td>{{ attribute.value }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+{% endif %}
+
+<!-- Description -->
+{% if listing.description %}
+<h2>Description</h2>
+<div class="description-text">{{ listing.description }}</div>
+{% endif %}
+
+<!-- Bid history: tabbed (chart + table) -->
+{% if bid_chart_data %}
+<h2>Bid History ({{ bid_chart_data|length }} bids)</h2>
+<div class="tabs" role="tablist">
+  <button class="active" onclick="switchTab(event, 'tab-chart')" role="tab" aria-selected="true">Chart</button>
+  <button onclick="switchTab(event, 'tab-table')" role="tab" aria-selected="false">Table</button>
+</div>
+
+<div id="tab-chart" class="tab-panel active">
+  <div class="chart-container"
+    style="margin-top: 0; border-top: none; border-top-left-radius: 0; border-top-right-radius: 0;">
+    <canvas id="bid-chart"></canvas>
+  </div>
+</div>
+
+<div id="tab-table" class="tab-panel">
+  <div class="bid-table-container"
+    style="border: 1px solid var(--pico-muted-border-color); border-top: none; border-radius: 0 0 var(--pico-border-radius) var(--pico-border-radius); background: var(--pico-card-background-color);">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Bidder</th>
+          <th>Country</th>
+          <th>Time</th>
+          <th class="text-right">Amount</th>
+          {% if listing.currency != "EUR" %}<th class="text-right">EUR</th>{% endif %}
+          <th>Type</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for bid in listing.bids|reverse %}
+        <tr>
+          <td class="muted">{{ listing.bids|length - loop.index0 }}</td>
+          <td>
+            {% if bid.bidder_username %}
+            <a href="/bidders/{{ bid.bidder_username }}">{{ bid.bidder_username }}</a>
+            {% else %}
+            Anonymous
+            {% endif %}
+          </td>
+          <td>{% if bid.bidder_country %}<span title="{{ bid.bidder_country }}">{{ bid.bidder_country }}</span>{% else
+            %}–{% endif %}</td>
+          <td class="no-wrap">{{ bid.bid_time|format_datetime }}</td>
+          <td class="text-right"><strong>{{ bid.amount|format_price(bid.currency) }}</strong></td>
+          {% if listing.currency != "EUR" %}
+          <td class="text-right eur-hint">{% if bid.amount_eur is not none %}{{ bid.amount_eur|format_price("EUR") }}{%
+            else %}–{% endif %}</td>
+          {% endif %}
+          <td>{% if bid.is_automatic %}<span class="autobid-badge">auto</span>{% else %}manual{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<!-- Price snapshot chart -->
+{% if snapshot_chart_data %}
+<h2>Price History</h2>
+<div class="chart-container">
+  <canvas id="snapshot-chart"></canvas>
+</div>
+{% endif %}
+
+<!-- External link -->
+<p class="mt-1">
+  <a href="{{ listing.url }}" target="_blank" rel="noopener noreferrer">
+    View on {{ listing.website.name if listing.website else "website" }} &#8599;
+  </a>
+  &nbsp;&middot;&nbsp;
+  <small class="muted">ID: {{ listing.external_id }}</small>
+</p>
+
+<!-- Mark as not a writing instrument (queued for cancel) -->
+<!-- Mark as not a writing instrument (queued for cancel) -->
+{% if listing.status.value != "cancelled" %}
+<p class="mt-1">
+<form method="post" action="/listings/{{ listing.id }}/mark-cancel" style="display: inline;">
+  <button type="submit" class="secondary outline" style="margin-bottom: 0;">
+    Mark as not a writing instrument
+  </button>
+</form>
+<small class="muted">Queues this listing to be set to cancelled when you run <code>fix-database</code>.</small>
+</p>
+{% endif %}
+
+<!-- Mark as writing instrument (restore) -->
+{% set is_rejected = false %}
+{% for attr in attributes %}
+{% if attr.name in ["rejected_by_classifier", "manually_cancelled"] %}
+{% set is_rejected = true %}
+{% endif %}
+{% endfor %}
+
+{% if listing.status.value == "cancelled" or is_rejected %}
+<p class="mt-1">
+<form method="post" action="/listings/{{ listing.id }}/mark-confirm" style="display: inline;">
+  <button type="submit" class="primary"
+    style="margin-bottom: 0; background-color: var(--pico-primary-background); border-color: var(--pico-primary-background); color: white;">
+    Mark as writing instrument
+  </button>
+</form>
+<small class="muted">Restores this listing and prevents future automatic cancellation.</small>
+</p>
+{% endif %}
+
+{% if request.args.get("mark_cancel") == "ok" %}
+<p class="mt-1" style="color: var(--pico-primary); font-weight: 600;">
+  Listing queued for cancellation. Run <code>python -m auction_tracker fix-database</code> to apply.
+</p>
+{% endif %}
+{% if request.args.get("mark_confirm") == "ok" %}
+<p class="mt-1" style="color: #2da44e; font-weight: 600;">
+  Listing restored and confirmed as writing instrument.
+</p>
+{% endif %}
+{% if request.args.get("mark_cancel") == "already_cancelled" %}
+<p class="mt-1 muted">This listing is already cancelled.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Lightbox
+  function openLightbox(src) {
+    var dialog = document.getElementById("lightbox");
+    document.getElementById("lightbox-image").src = src;
+    dialog.showModal();
+  }
+
+  // Tab switching
+  function switchTab(event, tabId) {
+    // Deactivate all tabs and panels
+    var tabs = event.target.parentNode.querySelectorAll("button");
+    tabs.forEach(function (tab) { tab.classList.remove("active"); tab.setAttribute("aria-selected", "false"); });
+    var panels = event.target.parentNode.parentNode.querySelectorAll(".tab-panel");
+    panels.forEach(function (panel) { panel.classList.remove("active"); });
+    // Activate the clicked tab and its panel
+    event.target.classList.add("active");
+    event.target.setAttribute("aria-selected", "true");
+    document.getElementById(tabId).classList.add("active");
+  }
+</script>
+
+{% if bid_chart_data or snapshot_chart_data %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+<script>
+  {% if bid_chart_data %}
+  (function () {
+    var data = {{ bid_chart_data| tojson_safe
+  }};
+  var refLines = {{ reference_lines| tojson_safe }};
+  var context = document.getElementById("bid-chart").getContext("2d");
+
+  // Prepend a starting point at auction start time with starting price
+  {% if listing.start_time %}
+  var startPoint = {
+    x: "{{ listing.start_time.isoformat() }}",
+    y: {{ listing.starting_price| float if listing.starting_price else 0 }},
+  bidder: "Starting price",
+    country: "",
+      automatic: false
+    };
+  data.unshift(startPoint);
+  {% endif %}
+
+  // Build annotation lines for reference prices
+  var annotations = {};
+  if (refLines.reserve_price) {
+    annotations.reserveLine = {
+      type: "line",
+      yMin: refLines.reserve_price,
+      yMax: refLines.reserve_price,
+      borderColor: "rgba(255, 65, 54, 0.7)",
+      borderWidth: 2,
+      borderDash: [8, 4],
+      label: {
+        display: true,
+        content: "Reserve: " + refLines.reserve_price.toLocaleString() + " {{ listing.currency }}",
+        position: "start",
+        backgroundColor: "rgba(255, 65, 54, 0.85)",
+        color: "#fff",
+        font: { size: 11, weight: "bold" },
+        padding: 4,
+      }
+    };
+  }
+  if (refLines.estimate_low) {
+    annotations.estimateLow = {
+      type: "line",
+      yMin: refLines.estimate_low,
+      yMax: refLines.estimate_low,
+      borderColor: "rgba(0, 116, 217, 0.55)",
+      borderWidth: 1.5,
+      borderDash: [6, 3],
+      label: {
+        display: true,
+        content: "Est. low: " + refLines.estimate_low.toLocaleString() + " {{ listing.currency }}",
+        position: "start",
+        backgroundColor: "rgba(0, 116, 217, 0.8)",
+        color: "#fff",
+        font: { size: 10 },
+        padding: 3,
+      }
+    };
+  }
+  if (refLines.estimate_high) {
+    annotations.estimateHigh = {
+      type: "line",
+      yMin: refLines.estimate_high,
+      yMax: refLines.estimate_high,
+      borderColor: "rgba(0, 116, 217, 0.55)",
+      borderWidth: 1.5,
+      borderDash: [6, 3],
+      label: {
+        display: true,
+        content: "Est. high: " + refLines.estimate_high.toLocaleString() + " {{ listing.currency }}",
+        position: "end",
+        backgroundColor: "rgba(0, 116, 217, 0.8)",
+        color: "#fff",
+        font: { size: 10 },
+        padding: 3,
+      }
+    };
+  }
+
+  // If we have both estimate lines, fill the area between them
+  if (refLines.estimate_low && refLines.estimate_high) {
+    annotations.estimateBox = {
+      type: "box",
+      yMin: refLines.estimate_low,
+      yMax: refLines.estimate_high,
+      backgroundColor: "rgba(0, 116, 217, 0.06)",
+      borderWidth: 0,
+    };
+  }
+
+  new Chart(context, {
+    type: "line",
+    data: {
+      datasets: [{
+        label: "Bid Amount ({{ listing.currency }})",
+        data: data.map(function (item) {
+          return { x: item.time, y: item.amount };
+        }),
+        borderColor: "#7c3aed",
+        backgroundColor: "rgba(124, 58, 237, 0.1)",
+        fill: true,
+        stepped: "after",
+        pointRadius: 5,
+        pointHoverRadius: 8,
+        pointBackgroundColor: data.map(function (item) {
+          return item.automatic ? "#f59e0b" : "#7c3aed";
+        }),
+        pointBorderColor: data.map(function (item) {
+          return item.automatic ? "#f59e0b" : "#7c3aed";
+        }),
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        tooltip: {
+          callbacks: {
+            title: function (tooltipItems) {
+              var idx = tooltipItems[0].dataIndex;
+              return new Date(data[idx].time).toLocaleString();
+            },
+            label: function (context) {
+              var line = context.parsed.y.toLocaleString() + " {{ listing.currency }}";
+              {% if listing.currency != "EUR" %}
+              var idx = context.dataIndex;
+              if (data[idx].amount_eur) {
+                line += "  (≈ " + data[idx].amount_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " EUR)";
+              }
+              {% endif %}
+              return line;
+            },
+            afterLabel: function (context) {
+              var idx = context.dataIndex;
+              var lines = [];
+              var bidder = data[idx].bidder;
+              var country = data[idx].country;
+              var label = "Bidder: " + bidder;
+              if (country) label += " (" + country + ")";
+              lines.push(label);
+              if (data[idx].automatic) lines.push("⚡ Automatic bid");
+              return lines;
+            }
+          }
+        },
+        annotation: {
+          annotations: annotations
+        }
+      },
+      scales: {
+        x: {
+          type: "time",
+          time: {
+            tooltipFormat: "PPpp",
+            displayFormats: {
+              minute: "MMM d, HH:mm",
+              hour: "MMM d, HH:mm",
+              day: "MMM d",
+            }
+          },
+          title: { display: true, text: "Time" },
+          ticks: {
+            maxRotation: 45,
+          }
+        },
+        y: {
+          beginAtZero: true,
+          title: { display: true, text: "{{ listing.currency }}" },
+          ticks: {
+            callback: function (value) {
+              return value.toLocaleString();
+            }
+          }
+        }
+      }
+    }
+  });
+  }) ();
+  {% endif %}
+
+  {% if snapshot_chart_data %}
+  (function () {
+    var data = {{ snapshot_chart_data| tojson_safe
+  }};
+  var context = document.getElementById("snapshot-chart").getContext("2d");
+  new Chart(context, {
+    type: "line",
+    data: {
+      datasets: [
+        {
+          label: "Price ({{ listing.currency }})",
+          data: data.map(function (item) {
+            return { x: item.time, y: item.price };
+          }),
+          borderColor: "#0074d9",
+          backgroundColor: "rgba(0, 116, 217, 0.1)",
+          fill: true,
+          stepped: "after",
+          yAxisID: "y",
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: {
+        mode: "index",
+        intersect: false,
+      },
+      plugins: {
+        tooltip: {
+          callbacks: {
+              {% if listing.currency != "EUR" %}
+  afterBody: function(tooltipItems) {
+    var idx = tooltipItems[0].dataIndex;
+    var eur = data[idx].price_eur;
+    if (eur) {
+      return "≈ " + eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " EUR";
+    }
+    return "";
+  }
+  {% endif %}
+            }
+          }
+        },
+  scales: {
+    x: {
+      type: "time",
+        time: {
+        tooltipFormat: "PPpp",
+          displayFormats: {
+          minute: "MMM d, HH:mm",
+            hour: "MMM d, HH:mm",
+              day: "MMM d",
+              }
+      },
+      title: { display: true, text: "Time" },
+    },
+    y: {
+      type: "linear",
+        display: true,
+          position: "left",
+            title: { display: true, text: "{{ listing.currency }}" },
+      beginAtZero: true,
+          }
+  }
+      }
+    });
+  }) ();
+  {% endif %}
+</script>
+{% endif %}
+{% endblock %}

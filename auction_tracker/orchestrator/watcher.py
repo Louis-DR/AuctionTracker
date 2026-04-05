@@ -33,7 +33,8 @@ from auction_tracker.orchestrator.scheduler import (
   Scheduler,
   TrackedListing,
 )
-from auction_tracker.parsing.base import ParserRegistry
+from auction_tracker.orchestrator.utils import fetch_and_parse_listing
+from auction_tracker.parsing.base import ParserBlocked, ParserRegistry
 from auction_tracker.transport.base import TransportError
 from auction_tracker.transport.router import TransportRouter
 
@@ -183,12 +184,12 @@ class Watcher:
     parser = ParserRegistry.get(website_name)
 
     try:
-      result = await self._router.fetch(website_name, tracked.url)
-    except TransportError:
+      _result, scraped = await fetch_and_parse_listing(
+        self._router, parser, website_name, tracked.url,
+      )
+    except (TransportError, ParserBlocked):
       tracked.consecutive_failures += 1
       raise
-
-    scraped = parser.parse_listing(result.html)
     stats.checks_performed += 1
     tracked.consecutive_failures = 0
     tracked.last_fetched_at = time.time()

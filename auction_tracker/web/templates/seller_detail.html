@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% set active_page = "sellers" %}
+{% block title %}{{ seller.display_name or seller.username }} – AuctionTracker{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<p><a href="/sellers">&larr; Back to sellers</a></p>
+
+<h1>{{ seller.display_name or seller.username }}</h1>
+
+<!-- Seller info -->
+<article>
+  <table>
+    <tbody>
+      <tr><td>Username</td><td>{{ seller.username }}</td></tr>
+      {% if seller.display_name %}
+      <tr><td>Display name</td><td>{{ seller.display_name }}</td></tr>
+      {% endif %}
+      <tr><td>Website</td><td>{{ seller.website.name if seller.website else "?" }}</td></tr>
+      {% if seller.country %}
+      <tr><td>Country</td><td>{{ seller.country }}</td></tr>
+      {% endif %}
+      {% if seller.rating is not none %}
+      <tr><td>Rating</td><td>{{ "%.1f"|format(seller.rating) }} &#9733;</td></tr>
+      {% endif %}
+      {% if seller.feedback_count is not none %}
+      <tr><td>Feedback count</td><td>{{ seller.feedback_count }}</td></tr>
+      {% endif %}
+      {% if seller.member_since %}
+      <tr><td>Member since</td><td>{{ seller.member_since|format_date }}</td></tr>
+      {% endif %}
+      {% if seller.profile_url %}
+      <tr>
+        <td>Profile</td>
+        <td><a href="{{ seller.profile_url }}" target="_blank" rel="noopener noreferrer">View on website &#8599;</a></td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</article>
+
+<!-- Seller listings -->
+<h2>Listings ({{ listings|length }})</h2>
+{% if listings %}
+<div style="overflow-x: auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th class="text-right">Price</th>
+        <th class="text-right">Bids</th>
+        <th>Status</th>
+        <th>Type</th>
+        <th>Added</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for listing in listings %}
+      <tr class="clickable-row" onclick="location.href='/listings/{{ listing.id }}'">
+        <td>{{ listing.title[:80] }}{% if listing.title|length > 80 %}&hellip;{% endif %}</td>
+        <td class="text-right no-wrap">
+          {% if listing.final_price is not none %}
+            {{ listing.final_price|format_price(listing.currency) }}
+          {% elif listing.current_price is not none %}
+            {{ listing.current_price|format_price(listing.currency) }}
+          {% else %}
+            &ndash;
+          {% endif %}
+        </td>
+        <td class="text-right">{{ listing.bid_count }}</td>
+        <td><span class="badge badge-{{ listing.status.value }}">{{ listing.status.value }}</span></td>
+        <td><span class="badge badge-{{ listing.listing_type.value }}">{{ listing.listing_type.value }}</span></td>
+        <td class="no-wrap">{{ listing.created_at|format_datetime }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="muted">No listings from this seller yet.</p>
+{% endif %}
+{% endblock %}

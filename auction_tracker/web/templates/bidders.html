@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% set active_page = "bidders" %}
+{% block title %}Bidders – AuctionTracker{% endblock %}
+
+{% block content %}
+<hgroup>
+  <h1>Bidders</h1>
+  <p>{{ bidder_stats|length }} unique bidder{{ "s" if bidder_stats|length != 1 else "" }}</p>
+</hgroup>
+
+{% if bidder_stats %}
+<div style="overflow-x: auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Username</th>
+        <th>Country</th>
+        <th class="text-right">Listings</th>
+        <th class="text-right">Won</th>
+        <th class="text-right">Total Spent (EUR)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in bidder_stats %}
+      <tr class="clickable-row"
+          onclick="location.href='/bidders/{{ row.bidder_username|urlencode }}'">
+        <td><strong>{{ row.bidder_username }}</strong></td>
+        <td>{{ row.bidder_country or "–" }}</td>
+        <td class="text-right">{{ row.listing_count }}</td>
+        <td class="text-right">{{ row.won_count or 0 }}</td>
+        <td class="text-right">
+          {% if row.total_spent_eur %}
+            {{ "%.2f"|format(row.total_spent_eur|float) }}&nbsp;EUR
+          {% else %}
+            –
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="muted">No bid data yet.</p>
+{% endif %}
+{% endblock %}

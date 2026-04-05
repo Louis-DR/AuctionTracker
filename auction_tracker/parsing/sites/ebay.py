@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 
-from auction_tracker.parsing.base import Parser, ParserCapabilities, ParserRegistry
+from auction_tracker.parsing.base import Parser, ParserBlocked, ParserCapabilities, ParserRegistry
 from auction_tracker.parsing.models import (
   ScrapedBid,
   ScrapedListing,
@@ -33,17 +33,21 @@ logger = logging.getLogger(__name__)
 
 # eBay regional domains, ordered by anti-bot leniency.
 EBAY_DOMAINS = [
+  "ebay.fr",
   "ebay.com",
   "ebay.co.uk",
-  "ebay.de",
-  "ebay.fr",
   "ebay.it",
   "ebay.es",
+  "ebay.de",
   "ebay.com.au",
   "ebay.ca",
 ]
 
-DEFAULT_DOMAIN = "ebay.com"
+# France is the reference market for this tool; ebay.fr is the default
+# search and fallback domain. This means listings are fetched in French,
+# which prevents German labels (e.g. "Artikelstandort") from appearing
+# when the fallback resolver settles on ebay.de.
+DEFAULT_DOMAIN = "ebay.fr"
 
 # eBay condition ID to our condition string mapping.
 _CONDITION_MAP: dict[str, str] = {
@@ -128,12 +132,37 @@ class EbayParser(Parser):
       return match.group(1)
     return None
 
+  @staticmethod
+  def fallback_urls_for(url: str) -> list[str]:
+    """Return the same URL rewritten for each eBay domain, skipping the current one.
+
+    eBay item IDs are global — any item accessible on ebay.fr is also
+    accessible on ebay.com with the same numeric ID. US and UK domains
+    tend to be less restrictive about cookie consent / sign-in walls.
+    """
+    current_domain_match = re.search(r"https?://www\.(ebay\.[^/]+)", url)
+    current_domain = current_domain_match.group(1) if current_domain_match else None
+    results = []
+    for domain in EBAY_DOMAINS:
+      if domain == current_domain:
+        continue
+      rewritten = re.sub(r"https?://www\.ebay\.[^/]+", f"https://www.{domain}", url)
+      results.append(rewritten)
+    return results
+
   # ------------------------------------------------------------------
   # Search results parsing
   # ------------------------------------------------------------------
 
-  def parse_search_results(self, html: str) -> list[ScrapedSearchResult]:
+  def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
     results: list[ScrapedSearchResult] = []
+
+    if _is_blocked_page(html):
+      raise ParserBlocked(
+        "eBay returned a blocked/challenge page for search",
+        url=url,
+        fallback_urls=self.fallback_urls_for(url) if url else [],
+      )
 
     srp_start = html.find("srp-results")
     if srp_start < 0:
@@ -193,9 +222,13 @@ class EbayParser(Parser):
   # Listing detail parsing
   # ------------------------------------------------------------------
 
-  def parse_listing(self, html: str) -> ScrapedListing:
+  def parse_listing(self, html: str, url: str = "") -> ScrapedListing:
     if _is_blocked_page(html):
-      raise ValueError("eBay returned a blocked/challenge page")
+      raise ParserBlocked(
+        "eBay returned a blocked/challenge page",
+        url=url,
+        fallback_urls=self.fallback_urls_for(url) if url else [],
+      )
 
     # Find the Marko.js data script containing listing data.
     data_script = _find_data_script(html)
@@ -365,20 +398,27 @@ def _find_data_script(html: str) -> str:
 
 
 def _is_blocked_page(html: str) -> bool:
-  """Detect captcha, sign-in, or security challenge pages."""
+  """Detect captcha, sign-in, or security challenge pages.
+
+  Real listing pages are 200-800 KB. Genuine blocked/redirect pages
+  are tiny (< 50 KB). Indicators like 'signin.ebay' or 'sign in or
+  register' appear in the navigation of every valid eBay page, so
+  they are only meaningful on small pages. The page title is the
+  most reliable signal at any size.
+  """
   if len(html) < 50000:
     lower_html = html.lower()
     challenge_markers = [
       "challenge", "captcha",
       "confirmer votre identité", "confirm your identity",
       "bestätigen sie ihre identität", "confirma tu identidad",
+      # Sign-in redirect URL — meaningful only on small pages because
+      # every real eBay page has a signin.ebay link in the header.
+      "signin.ebay",
+      "sign in or register",
     ]
     if any(marker in lower_html for marker in challenge_markers):
       return True
-
-  lower_html = html.lower()
-  if "sign in or register" in lower_html or "signin.ebay" in lower_html:
-    return True
 
   title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.DOTALL)
   if title_match:
@@ -386,6 +426,7 @@ def _is_blocked_page(html: str) -> bool:
     sign_in_markers = [
       "sign in", "se connecter", "einloggen", "accedi",
       "inicia sesión", "security measure",
+      "pardon our interruption",
     ]
     if any(marker in title_lower for marker in sign_in_markers):
       return True

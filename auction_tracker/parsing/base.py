@@ -16,6 +16,22 @@ from auction_tracker.parsing.models import ScrapedListing, ScrapedSearchResult
 logger = logging.getLogger(__name__)
 
 
+class ParserBlocked(Exception):
+  """Raised when the fetched HTML is a bot-detection / consent page.
+
+  Unlike a transport-level block (HTTP 403/429), the server returned
+  HTTP 200 with valid HTML but the page content is a challenge,
+  sign-in redirect, or cookie-consent gate rather than actual listing
+  data. Callers can inspect ``fallback_urls`` to retry the same
+  resource on alternative server paths or regional domains.
+  """
+
+  def __init__(self, message: str, url: str, fallback_urls: list[str] | None = None) -> None:
+    super().__init__(message)
+    self.url = url
+    self.fallback_urls: list[str] = fallback_urls or []
+
+
 @dataclass(frozen=True)
 class ParserCapabilities:
   """Declares what a parser can extract.
@@ -63,9 +79,13 @@ class Parser(abc.ABC):
     """
 
   @abc.abstractmethod
-  def parse_listing(self, html: str) -> ScrapedListing:
+  def parse_listing(self, html: str, url: str = "") -> ScrapedListing:
     """Parse a listing detail page into structured data.
 
+    The optional ``url`` is used to populate ``ParserBlocked.fallback_urls``
+    when the page is a challenge or consent gate rather than real content.
+
+    Raises ParserBlocked if the HTML is a bot-detection page.
     Raises ValueError if the HTML does not contain a recognizable
     listing (e.g. the page was removed or the structure changed).
     """

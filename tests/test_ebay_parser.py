@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from auction_tracker.parsing.base import ParserRegistry
+from auction_tracker.parsing.base import ParserBlocked, ParserRegistry
 from auction_tracker.parsing.sites.ebay import (
   EbayParser,
   _derive_status,
@@ -67,7 +67,7 @@ class TestUrlBuilding:
 
   def test_build_search_url_default(self, parser: EbayParser):
     url = parser.build_search_url("fountain pen")
-    assert "ebay.com" in url
+    assert "ebay.fr" in url
     assert "_nkw=fountain+pen" in url
     assert "_sacat=0" in url
 
@@ -217,8 +217,27 @@ class TestListingParsing:
   def test_blocked_page_raises(self, parser: EbayParser):
     blocked_html = """<html><head><title>Security Measure</title></head>
     <body>Please confirm your identity. challenge page.</body></html>"""
-    with pytest.raises(ValueError, match="blocked"):
+    with pytest.raises(ParserBlocked):
       parser.parse_listing(blocked_html)
+
+  def test_blocked_page_carries_fallback_urls(self, parser: EbayParser):
+    blocked_html = """<html><head><title>Security Measure</title></head>
+    <body>Please confirm your identity. challenge page.</body></html>"""
+    with pytest.raises(ParserBlocked) as exc_info:
+      parser.parse_listing(blocked_html, url="https://www.ebay.fr/itm/177969839255")
+    assert len(exc_info.value.fallback_urls) > 0
+    # The original domain must not appear in fallbacks.
+    assert not any("ebay.fr" in u for u in exc_info.value.fallback_urls)
+    # ebay.com (least restrictive) should be first.
+    assert "ebay.com" in exc_info.value.fallback_urls[0]
+
+  def test_fallback_urls_for(self, parser: EbayParser):
+    fallbacks = parser.fallback_urls_for("https://www.ebay.fr/itm/177969839255")
+    assert all("/itm/177969839255" in u for u in fallbacks)
+    assert not any("ebay.fr" in u for u in fallbacks)
+    assert len(fallbacks) == len([d for d in ["ebay.com", "ebay.co.uk", "ebay.de",
+                                               "ebay.it", "ebay.es", "ebay.com.au",
+                                               "ebay.ca"]])
 
 
 # ------------------------------------------------------------------

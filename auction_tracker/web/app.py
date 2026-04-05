@@ -1,0 +1,1038 @@
+"""Flask web application for visualizing the AuctionTracker database.
+
+Provides a read-only HTML frontend for browsing listings, sellers,
+price history, and images stored by the tracker.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
+
+from flask import (
+  Flask,
+  abort,
+  redirect,
+  render_template,
+  request,
+  send_from_directory,
+  url_for,
+)
+from markupsafe import Markup
+from sqlalchemy import delete, desc, func, select
+from sqlalchemy.orm import joinedload
+
+from auction_tracker.config import AppConfig, load_config
+from auction_tracker.database.engine import DatabaseEngine
+from auction_tracker.database.models import (
+  BidEvent,
+  Listing,
+  ListingAttribute,
+  ListingImage,
+  ListingStatus,
+  ListingType,
+  SearchQuery,
+  Seller,
+  Website,
+)
+
+
+class _DecimalDatetimeEncoder(json.JSONEncoder):
+  """JSON encoder that handles Decimal and datetime objects."""
+
+  def default(self, obj):
+    if isinstance(obj, Decimal):
+      return float(obj)
+    if isinstance(obj, datetime):
+      return obj.isoformat()
+    return super().default(obj)
+
+
+def create_app(config: AppConfig | None = None, config_path: Path | None = None) -> Flask:
+  """Flask application factory.
+
+  Accepts either a pre-built AppConfig or a path to a YAML config file.
+  If neither is given, loads config.yaml from the current directory
+  (or defaults).
+  """
+  if config is None:
+    config = load_config(config_path)
+
+  database = DatabaseEngine(config.database.path)
+  database.initialize()
+
+  images_directory = str(config.classifier.images_directory)
+  display_tz = ZoneInfo(config.display_timezone)
+
+  app = Flask(
+    __name__,
+    template_folder=str(Path(__file__).parent / "templates"),
+  )
+  app.config["IMAGES_DIR"] = images_directory
+  app.config["MANUAL_CANCEL_FILE"] = str(
+    config.database.path.parent / "manual_cancel_listings.txt",
+  )
+
+  # ------------------------------------------------------------------
+  # Template filters
+  # ------------------------------------------------------------------
+
+  @app.template_filter("format_price")
+  def filter_format_price(value, currency=""):
+    if value is None:
+      return "\u2013"
+    formatted = f"{float(value):,.2f}"
+    if currency:
+      formatted += f"\u00a0{currency}"
+    return formatted
+
+  @app.template_filter("format_datetime")
+  def filter_format_datetime(value):
+    if value is None:
+      return "\u2013"
+    # Datetimes are stored as UTC-naive; attach UTC then convert to the
+    # configured display timezone before formatting.
+    if value.tzinfo is None:
+      value = value.replace(tzinfo=UTC)
+    return value.astimezone(display_tz).strftime("%Y-%m-%d %H:%M")
+
+  @app.template_filter("format_date")
+  def filter_format_date(value):
+    if value is None:
+      return "\u2013"
+    if value.tzinfo is None:
+      value = value.replace(tzinfo=UTC)
+    return value.astimezone(display_tz).strftime("%Y-%m-%d")
+
+  @app.template_filter("tojson_safe")
+  def filter_tojson_safe(value):
+    """Serialize to JSON for embedding in <script> tags."""
+    return Markup(json.dumps(value, cls=_DecimalDatetimeEncoder))
+
+  # ------------------------------------------------------------------
+  # Routes — Dashboard
+  # ------------------------------------------------------------------
+
+  @app.route("/")
+  def dashboard():
+    with database.session() as session:
+      total_listings = session.execute(
+        select(func.count(Listing.id))
+      ).scalar() or 0
+
+      status_counts = dict(
+        session.execute(
+          select(Listing.status, func.count(Listing.id))
+          .group_by(Listing.status)
+        ).all()
+      )
+
+      website_stats = session.execute(
+        select(Website.name, func.count(Listing.id))
+        .outerjoin(Listing)
+        .group_by(Website.id)
+        .order_by(desc(func.count(Listing.id)))
+      ).all()
+
+      total_sellers = session.execute(
+        select(func.count(Seller.id))
+      ).scalar() or 0
+
+      total_websites = session.execute(
+        select(func.count(Website.id))
+      ).scalar() or 0
+
+      total_images = session.execute(
+        select(func.count(ListingImage.id))
+      ).scalar() or 0
+
+      price_stats = session.execute(
+        select(
+          func.avg(Listing.current_price_eur),
+          func.min(Listing.current_price_eur),
+          func.max(Listing.current_price_eur),
+        ).where(Listing.status == ListingStatus.ACTIVE)
+         .where(Listing.current_price_eur.isnot(None))
+      ).one()
+
+      sold_price_stats = session.execute(
+        select(
+          func.avg(Listing.final_price_eur),
+          func.min(Listing.final_price_eur),
+          func.max(Listing.final_price_eur),
+          func.count(Listing.id),
+        ).where(Listing.status == ListingStatus.SOLD)
+         .where(Listing.final_price_eur.isnot(None))
+         .where(Listing.final_price.isnot(None))
+      ).one()
+
+      recent_listings = session.execute(
+        select(Listing)
+        .options(joinedload(Listing.website))
+        .order_by(desc(Listing.created_at))
+        .limit(20)
+      ).scalars().unique().all()
+
+      return render_template(
+        "dashboard.html",
+        total_listings=total_listings,
+        status_counts=status_counts,
+        website_stats=website_stats,
+        total_sellers=total_sellers,
+        total_websites=total_websites,
+        total_images=total_images,
+        price_avg=price_stats[0],
+        price_min=price_stats[1],
+        price_max=price_stats[2],
+        sold_price_avg=sold_price_stats[0],
+        sold_price_min=sold_price_stats[1],
+        sold_price_max=sold_price_stats[2],
+        sold_count=sold_price_stats[3],
+        recent_listings=recent_listings,
+        ListingStatus=ListingStatus,
+      )
+
+  # ------------------------------------------------------------------
+  # Routes — Listings
+  # ------------------------------------------------------------------
+
+  @app.route("/listings")
+  def listings():
+    page = request.args.get("page", 1, type=int)
+    per_page = request.args.get("per_page", 50, type=int)
+    search_query = request.args.get("q", "")
+    type_filter = request.args.get("type", "")
+    source_filter = request.args.get("source", "")
+    sort_by = request.args.get("sort", "created_at")
+    sort_dir = request.args.get("dir", "desc")
+
+    status_filters = request.args.getlist("status")
+    website_filters = request.args.getlist("website")
+
+    is_form_submission = request.args.get("_filtered", "") == "1"
+    if not status_filters and not is_form_submission:
+      status_filters = [
+        status.value
+        for status in ListingStatus
+        if status not in (ListingStatus.CANCELLED, ListingStatus.UNKNOWN)
+      ]
+
+    allowed_sort_columns = {
+      "created_at", "title", "current_price", "final_price",
+      "bid_count", "end_time", "start_time", "status",
+    }
+    if sort_by not in allowed_sort_columns:
+      sort_by = "created_at"
+
+    price_sort_mapping = {
+      "current_price": "current_price_eur",
+      "final_price": "final_price_eur",
+    }
+    db_sort_column = price_sort_mapping.get(sort_by, sort_by)
+
+    with database.session() as session:
+      statement = select(Listing).options(
+        joinedload(Listing.website),
+        joinedload(Listing.images),
+      )
+      count_statement = select(func.count(Listing.id))
+
+      if search_query:
+        filter_clause = Listing.title.ilike(f"%{search_query}%")
+        statement = statement.where(filter_clause)
+        count_statement = count_statement.where(filter_clause)
+
+      if status_filters:
+        valid_statuses = []
+        for status_value in status_filters:
+          with contextlib.suppress(ValueError):
+            valid_statuses.append(ListingStatus(status_value))
+        if valid_statuses:
+          statement = statement.where(Listing.status.in_(valid_statuses))
+          count_statement = count_statement.where(Listing.status.in_(valid_statuses))
+
+      if website_filters:
+        valid_website_ids = []
+        for website_value in website_filters:
+          with contextlib.suppress(ValueError):
+            valid_website_ids.append(int(website_value))
+        if valid_website_ids:
+          statement = statement.where(Listing.website_id.in_(valid_website_ids))
+          count_statement = count_statement.where(Listing.website_id.in_(valid_website_ids))
+
+      if type_filter:
+        try:
+          type_enum = ListingType(type_filter)
+          statement = statement.where(Listing.listing_type == type_enum)
+          count_statement = count_statement.where(Listing.listing_type == type_enum)
+        except ValueError:
+          pass
+
+      if source_filter:
+        source_attr_name = f"source_search:{source_filter}"
+        source_subquery = (
+          select(ListingAttribute.listing_id)
+          .where(ListingAttribute.attribute_name == source_attr_name)
+        )
+        statement = statement.where(Listing.id.in_(source_subquery))
+        count_statement = count_statement.where(Listing.id.in_(source_subquery))
+
+      sort_column = getattr(Listing, db_sort_column, Listing.created_at)
+      if sort_dir == "asc":
+        statement = statement.order_by(sort_column.asc())
+      else:
+        statement = statement.order_by(sort_column.desc())
+
+      total_count = session.execute(count_statement).scalar() or 0
+      total_pages = max(1, (total_count + per_page - 1) // per_page)
+      page = max(1, min(page, total_pages))
+
+      offset = (page - 1) * per_page
+      statement = statement.offset(offset).limit(per_page)
+
+      results = session.execute(statement).scalars().unique().all()
+
+      all_websites = session.execute(
+        select(Website).order_by(Website.name)
+      ).scalars().all()
+
+      # Build price history chart when filters are active.
+      price_history_data = None
+      has_filters = (
+        search_query or status_filters or website_filters
+        or type_filter or source_filter
+      )
+      if has_filters:
+        price_history_data = _build_price_history(
+          session, search_query, status_filters, website_filters,
+          type_filter, source_filter,
+        )
+
+      filter_params = []
+      if search_query:
+        filter_params.append(("q", search_query))
+      for status_value in status_filters:
+        filter_params.append(("status", status_value))
+      for website_value in website_filters:
+        filter_params.append(("website", website_value))
+      if type_filter:
+        filter_params.append(("type", type_filter))
+      if source_filter:
+        filter_params.append(("source", source_filter))
+      filter_params.append(("_filtered", "1"))
+      filter_query_string = urlencode(filter_params)
+
+      return render_template(
+        "listings.html",
+        listings=results,
+        total_count=total_count,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
+        search_query=search_query,
+        status_filters=status_filters,
+        website_filters=website_filters,
+        type_filter=type_filter,
+        source_filter=source_filter,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        filter_query_string=filter_query_string,
+        websites=all_websites,
+        ListingStatus=ListingStatus,
+        ListingType=ListingType,
+        price_history_data=price_history_data,
+      )
+
+  # ------------------------------------------------------------------
+  # Routes — Listing detail
+  # ------------------------------------------------------------------
+
+  @app.route("/listings/<int:listing_id>")
+  def listing_detail(listing_id):
+    with database.session() as session:
+      listing = session.execute(
+        select(Listing)
+        .options(
+          joinedload(Listing.website),
+          joinedload(Listing.seller),
+          joinedload(Listing.images),
+          joinedload(Listing.bids),
+          joinedload(Listing.price_snapshots),
+          joinedload(Listing.attributes),
+        )
+        .where(Listing.id == listing_id)
+      ).scalars().unique().first()
+
+      if listing is None:
+        abort(404)
+
+      is_non_eur = listing.currency != "EUR"
+      bid_chart_data = []
+      for bid in listing.bids:
+        display_time = bid.bid_time
+        if bid.is_automatic:
+          display_time = bid.bid_time + timedelta(seconds=1)
+        entry = {
+          "time": display_time.isoformat(),
+          "amount": float(bid.amount),
+          "bidder": bid.bidder_username or "Anonymous",
+          "country": bid.bidder_country or "",
+          "automatic": bid.is_automatic,
+        }
+        if is_non_eur and bid.amount_eur is not None:
+          entry["amount_eur"] = float(bid.amount_eur)
+        bid_chart_data.append(entry)
+
+      snapshot_chart_data = []
+      for snapshot in listing.price_snapshots:
+        entry = {
+          "time": snapshot.snapshot_time.isoformat(),
+          "price": float(snapshot.price),
+          "bid_count": snapshot.bid_count,
+        }
+        if is_non_eur and snapshot.price_eur is not None:
+          entry["price_eur"] = float(snapshot.price_eur)
+        snapshot_chart_data.append(entry)
+
+      reference_lines = {}
+      if listing.reserve_price is not None:
+        reference_lines["reserve_price"] = float(listing.reserve_price)
+      if listing.estimate_low is not None:
+        reference_lines["estimate_low"] = float(listing.estimate_low)
+      if listing.estimate_high is not None:
+        reference_lines["estimate_high"] = float(listing.estimate_high)
+
+      source_prefix = "source_search:"
+      source_searches = []
+      attributes_list = []
+      for attr in listing.attributes:
+        if attr.attribute_name.startswith(source_prefix):
+          source_searches.append(attr.attribute_name[len(source_prefix):])
+        else:
+          attributes_list.append({
+            "name": attr.attribute_name,
+            "value": attr.attribute_value,
+          })
+
+      return render_template(
+        "listing_detail.html",
+        listing=listing,
+        attributes=attributes_list,
+        source_searches=source_searches,
+        bid_chart_data=bid_chart_data,
+        snapshot_chart_data=snapshot_chart_data,
+        reference_lines=reference_lines,
+      )
+
+  @app.route("/listings/<int:listing_id>/mark-cancel", methods=["POST"])
+  def listing_mark_cancel(listing_id):
+    """Queue a listing for cancellation via a sidecar file."""
+    cancel_file = Path(app.config["MANUAL_CANCEL_FILE"])
+    with database.session() as session:
+      listing = session.execute(
+        select(Listing).where(Listing.id == listing_id),
+      ).scalars().first()
+      if listing is None:
+        abort(404)
+      if listing.status == ListingStatus.CANCELLED:
+        return redirect(
+          url_for("listing_detail", listing_id=listing_id)
+          + "?mark_cancel=already_cancelled",
+        )
+    try:
+      cancel_file.parent.mkdir(parents=True, exist_ok=True)
+      with open(cancel_file, "a", encoding="utf-8") as handle:
+        handle.write(f"{listing_id}\n")
+    except OSError:
+      abort(500, "Could not write to manual cancel file.")
+    return redirect(
+      url_for("listing_detail", listing_id=listing_id) + "?mark_cancel=ok",
+    )
+
+  @app.route("/listings/<int:listing_id>/mark-confirm", methods=["POST"])
+  def listing_mark_confirm(listing_id):
+    """Restore a cancelled listing and mark it as a confirmed writing instrument."""
+    cancel_file = Path(app.config["MANUAL_CANCEL_FILE"])
+
+    with database.session() as session:
+      listing = session.execute(
+        select(Listing).where(Listing.id == listing_id),
+      ).scalars().first()
+      if listing is None:
+        abort(404)
+
+      session.execute(
+        delete(ListingAttribute)
+        .where(ListingAttribute.listing_id == listing_id)
+        .where(ListingAttribute.attribute_name.in_([
+          "rejected_by_classifier",
+          "manually_cancelled",
+        ]))
+      )
+
+      existing_safelist = session.execute(
+        select(ListingAttribute)
+        .where(ListingAttribute.listing_id == listing_id)
+        .where(ListingAttribute.attribute_name == "confirmed_writing_instrument")
+      ).scalars().first()
+      if not existing_safelist:
+        session.add(
+          ListingAttribute(
+            listing_id=listing_id,
+            attribute_name="confirmed_writing_instrument",
+            attribute_value="true",
+          )
+        )
+
+      # Reset to UNKNOWN + not fully fetched so the discovery loop
+      # re-scrapes it and determines the correct status.
+      listing.status = ListingStatus.UNKNOWN
+      listing.is_fully_fetched = False
+      listing.last_checked_at = datetime.fromtimestamp(0, UTC)
+
+      session.commit()
+
+    # Remove from manual cancel file if present.
+    if cancel_file.exists():
+      try:
+        lines = cancel_file.read_text(encoding="utf-8").splitlines()
+        if str(listing_id) in lines:
+          new_lines = [line for line in lines if line.strip() != str(listing_id)]
+          cancel_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+      except OSError:
+        pass
+
+    return redirect(
+      url_for("listing_detail", listing_id=listing_id) + "?mark_confirm=ok",
+    )
+
+  # ------------------------------------------------------------------
+  # Routes — Sellers
+  # ------------------------------------------------------------------
+
+  @app.route("/sellers")
+  def sellers():
+    with database.session() as session:
+      all_sellers = session.execute(
+        select(Seller)
+        .options(
+          joinedload(Seller.website),
+          joinedload(Seller.listings),
+        )
+        .order_by(Seller.username)
+      ).scalars().unique().all()
+
+      return render_template("sellers.html", sellers=all_sellers)
+
+  @app.route("/sellers/<int:seller_id>")
+  def seller_detail(seller_id):
+    with database.session() as session:
+      seller = session.execute(
+        select(Seller)
+        .options(joinedload(Seller.website))
+        .where(Seller.id == seller_id)
+      ).scalars().first()
+      if seller is None:
+        abort(404)
+
+      seller_listings = session.execute(
+        select(Listing)
+        .options(joinedload(Listing.website))
+        .where(Listing.seller_id == seller_id)
+        .order_by(desc(Listing.created_at))
+      ).scalars().unique().all()
+
+      return render_template(
+        "seller_detail.html",
+        seller=seller,
+        listings=seller_listings,
+      )
+
+  # ------------------------------------------------------------------
+  # Routes — Bidders
+  # ------------------------------------------------------------------
+
+  @app.route("/bidders")
+  def bidders():
+    with database.session() as session:
+      max_bid_sub = (
+        select(
+          BidEvent.listing_id,
+          func.max(BidEvent.amount).label("max_amount"),
+        )
+        .group_by(BidEvent.listing_id)
+        .subquery()
+      )
+
+      winning_bids = (
+        select(
+          BidEvent.bidder_username,
+          Listing.final_price_eur,
+          Listing.final_price,
+          Listing.id.label("listing_id"),
+        )
+        .join(max_bid_sub, (
+          (BidEvent.listing_id == max_bid_sub.c.listing_id)
+          & (BidEvent.amount == max_bid_sub.c.max_amount)
+        ))
+        .join(Listing, BidEvent.listing_id == Listing.id)
+        .where(Listing.status == ListingStatus.SOLD)
+        .where(BidEvent.bidder_username.isnot(None))
+        .subquery()
+      )
+
+      wins_agg = (
+        select(
+          winning_bids.c.bidder_username,
+          func.count(winning_bids.c.listing_id).label("won_count"),
+          func.sum(winning_bids.c.final_price_eur).label("total_spent_eur"),
+        )
+        .group_by(winning_bids.c.bidder_username)
+        .subquery()
+      )
+
+      bidder_stats = session.execute(
+        select(
+          BidEvent.bidder_username,
+          BidEvent.bidder_country,
+          func.count(func.distinct(BidEvent.listing_id)).label("listing_count"),
+          wins_agg.c.won_count,
+          wins_agg.c.total_spent_eur,
+        )
+        .outerjoin(wins_agg, BidEvent.bidder_username == wins_agg.c.bidder_username)
+        .where(BidEvent.bidder_username.isnot(None))
+        .group_by(BidEvent.bidder_username, BidEvent.bidder_country)
+        .order_by(desc(func.count(func.distinct(BidEvent.listing_id))))
+      ).all()
+
+      return render_template("bidders.html", bidder_stats=bidder_stats)
+
+  @app.route("/bidders/<username>")
+  def bidder_detail(username):
+    with database.session() as session:
+      latest_bid = session.execute(
+        select(BidEvent)
+        .where(BidEvent.bidder_username == username)
+        .order_by(desc(BidEvent.bid_time))
+        .limit(1)
+      ).scalars().first()
+
+      if latest_bid is None:
+        abort(404)
+
+      bidder_country = latest_bid.bidder_country
+
+      stats = session.execute(
+        select(
+          func.count(func.distinct(BidEvent.listing_id)).label("listing_count"),
+          func.min(BidEvent.bid_time).label("first_bid_time"),
+          func.max(BidEvent.bid_time).label("last_bid_time"),
+        )
+        .where(BidEvent.bidder_username == username)
+      ).one()
+
+      max_bid_sub = (
+        select(
+          BidEvent.listing_id,
+          func.max(BidEvent.amount).label("max_amount"),
+        )
+        .group_by(BidEvent.listing_id)
+        .subquery()
+      )
+
+      won_listings = session.execute(
+        select(Listing)
+        .join(BidEvent, BidEvent.listing_id == Listing.id)
+        .join(max_bid_sub, (
+          (BidEvent.listing_id == max_bid_sub.c.listing_id)
+          & (BidEvent.amount == max_bid_sub.c.max_amount)
+        ))
+        .where(Listing.status == ListingStatus.SOLD)
+        .where(BidEvent.bidder_username == username)
+        .options(joinedload(Listing.website))
+        .order_by(desc(Listing.end_time))
+      ).scalars().unique().all()
+
+      total_spent_eur = sum(
+        float(listing.final_price_eur)
+        for listing in won_listings
+        if listing.final_price_eur is not None
+      )
+      avg_winning_price = (
+        total_spent_eur / len(won_listings) if won_listings else 0.0
+      )
+
+      spending_timeline = []
+      cumulative = 0.0
+      for listing in sorted(won_listings, key=lambda listing: listing.end_time or listing.created_at):
+        price = float(listing.final_price_eur) if listing.final_price_eur else 0.0
+        cumulative += price
+        spending_timeline.append({
+          "time": (listing.end_time or listing.created_at).isoformat(),
+          "total": round(cumulative, 2),
+          "item": listing.title[:60] if listing.title else "?",
+          "price": round(price, 2),
+        })
+
+      all_bids = session.execute(
+        select(BidEvent)
+        .options(joinedload(BidEvent.listing).joinedload(Listing.website))
+        .where(BidEvent.bidder_username == username)
+        .order_by(desc(BidEvent.bid_time))
+        .limit(500)
+      ).scalars().unique().all()
+
+      return render_template(
+        "bidder_detail.html",
+        username=username,
+        bidder_country=bidder_country,
+        stats=stats,
+        won_listings=won_listings,
+        total_spent_eur=total_spent_eur,
+        avg_winning_price=avg_winning_price,
+        spending_timeline=spending_timeline,
+        all_bids=all_bids,
+      )
+
+  # ------------------------------------------------------------------
+  # Routes — Searches
+  # ------------------------------------------------------------------
+
+  @app.route("/searches")
+  def searches():
+    source_prefix = "source_search:"
+
+    with database.session() as session:
+      saved_searches = session.execute(
+        select(SearchQuery)
+        .options(joinedload(SearchQuery.website))
+        .order_by(SearchQuery.name)
+      ).scalars().unique().all()
+
+      saved_by_query_text: dict[str, list[dict]] = {}
+      for search in saved_searches:
+        saved_dict = {
+          "name": search.name,
+          "category": search.category,
+          "website_name": (
+            search.website.name if search.website else "All websites"
+          ),
+          "is_active": search.is_active,
+        }
+        saved_by_query_text.setdefault(search.query_text, []).append(saved_dict)
+
+      raw_stats = session.execute(
+        select(
+          ListingAttribute.attribute_name,
+          Website.name.label("website_name"),
+          Listing.status,
+          func.count(Listing.id).label("listing_count"),
+        )
+        .join(Listing, Listing.id == ListingAttribute.listing_id)
+        .join(Website, Website.id == Listing.website_id)
+        .where(ListingAttribute.attribute_name.like(f"{source_prefix}%"))
+        .group_by(
+          ListingAttribute.attribute_name,
+          Website.name,
+          Listing.status,
+        )
+      ).all()
+
+      verified_stats = session.execute(
+        select(
+          ListingAttribute.attribute_name,
+          Website.name.label("website_name"),
+          func.count(func.distinct(Listing.id)).label("verified_count"),
+        )
+        .join(Listing, Listing.id == ListingAttribute.listing_id)
+        .join(Website, Website.id == Listing.website_id)
+        .where(ListingAttribute.attribute_name.like(f"{source_prefix}%"))
+        .where(
+          Listing.id.in_(
+            select(ListingAttribute.listing_id).where(
+              ListingAttribute.attribute_name.like("classifier_%")
+            )
+          )
+        )
+        .group_by(ListingAttribute.attribute_name, Website.name)
+      ).all()
+
+      verified_lookup = {}
+      for row in verified_stats:
+        verified_lookup[(row.attribute_name, row.website_name)] = row.verified_count
+
+      search_data: dict[str, dict] = {}
+      for row in raw_stats:
+        query_text = row.attribute_name[len(source_prefix):]
+        if query_text not in search_data:
+          search_data[query_text] = {
+            "query_text": query_text,
+            "saved_searches": saved_by_query_text.get(query_text, []),
+            "websites": {},
+            "total": 0,
+            "by_status": {},
+          }
+        entry = search_data[query_text]
+        entry["total"] += row.listing_count
+
+        status_label = row.status.value if row.status else "unknown"
+        entry["by_status"][status_label] = (
+          entry["by_status"].get(status_label, 0) + row.listing_count
+        )
+
+        website_name = row.website_name
+        if website_name not in entry["websites"]:
+          entry["websites"][website_name] = {
+            "total": 0,
+            "by_status": {},
+            "verified": 0,
+          }
+        website_entry = entry["websites"][website_name]
+        website_entry["total"] += row.listing_count
+        website_entry["by_status"][status_label] = (
+          website_entry["by_status"].get(status_label, 0) + row.listing_count
+        )
+        website_entry["verified"] = verified_lookup.get(
+          (row.attribute_name, website_name), 0,
+        )
+
+      rejected_stats = session.execute(
+        select(
+          ListingAttribute.attribute_name,
+          Website.name.label("website_name"),
+          func.count(func.distinct(Listing.id)).label("rejected_count"),
+        )
+        .join(Listing, Listing.id == ListingAttribute.listing_id)
+        .join(Website, Website.id == Listing.website_id)
+        .where(ListingAttribute.attribute_name.like(f"{source_prefix}%"))
+        .where(Listing.status == ListingStatus.CANCELLED)
+        .where(
+          Listing.id.in_(
+            select(ListingAttribute.listing_id).where(
+              ListingAttribute.attribute_name.like("classifier_%")
+            )
+          )
+        )
+        .group_by(ListingAttribute.attribute_name, Website.name)
+      ).all()
+
+      rejected_lookup = {}
+      for row in rejected_stats:
+        rejected_lookup[(row.attribute_name, row.website_name)] = row.rejected_count
+
+      for entry in search_data.values():
+        entry["verified"] = sum(
+          wd["verified"] for wd in entry["websites"].values()
+        )
+        entry["rejected"] = 0
+        for website_name, website_data in entry["websites"].items():
+          attr_name = f"{source_prefix}{entry['query_text']}"
+          website_rejected = rejected_lookup.get((attr_name, website_name), 0)
+          website_data["rejected"] = website_rejected
+          website_data["accepted"] = website_data["verified"] - website_rejected
+          website_data["acceptance_rate"] = (
+            round(100.0 * website_data["accepted"] / website_data["verified"], 1)
+            if website_data["verified"] > 0 else 0.0
+          )
+          website_data["verification_coverage"] = (
+            round(100.0 * website_data["verified"] / website_data["total"], 1)
+            if website_data["total"] > 0 else 0.0
+          )
+          entry["rejected"] += website_rejected
+
+        entry["accepted"] = entry["verified"] - entry["rejected"]
+        entry["acceptance_rate"] = (
+          round(100.0 * entry["accepted"] / entry["verified"], 1)
+          if entry["verified"] > 0 else 0.0
+        )
+        entry["verification_coverage"] = (
+          round(100.0 * entry["verified"] / entry["total"], 1)
+          if entry["total"] > 0 else 0.0
+        )
+
+      sorted_searches = sorted(
+        search_data.values(),
+        key=lambda entry: entry["total"],
+        reverse=True,
+      )
+
+      saved_search_list = []
+      for search in saved_searches:
+        stats = search_data.get(search.query_text, {})
+        saved_search_list.append({
+          "id": search.id,
+          "name": search.name,
+          "query_text": search.query_text,
+          "category": search.category,
+          "website_name": (
+            search.website.name if search.website else "All websites"
+          ),
+          "is_active": search.is_active,
+          "created_at": search.created_at,
+          "total": stats.get("total", 0),
+          "accepted": stats.get("accepted", 0),
+          "verification_coverage": stats.get("verification_coverage", 0.0),
+          "acceptance_rate": stats.get("acceptance_rate", 0.0),
+        })
+
+    return render_template(
+      "searches.html",
+      search_stats=sorted_searches,
+      saved_searches=saved_search_list,
+      ListingStatus=ListingStatus,
+    )
+
+  # ------------------------------------------------------------------
+  # Routes — Images
+  # ------------------------------------------------------------------
+
+  @app.route("/images/<path:filepath>")
+  def serve_image(filepath):
+    return send_from_directory(app.config["IMAGES_DIR"], filepath)
+
+  return app
+
+
+# -------------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------------
+
+
+def _build_price_history(
+  session,
+  search_query: str,
+  status_filters: list[str],
+  website_filters: list[str],
+  type_filter: str,
+  source_filter: str,
+) -> dict:
+  """Build price history scatter chart data from all matching listings.
+
+  Uses stored EUR prices when available. Listings without EUR prices
+  are skipped.
+  """
+  statement = select(Listing).options(
+    joinedload(Listing.website),
+    joinedload(Listing.images),
+  )
+
+  if search_query:
+    statement = statement.where(Listing.title.ilike(f"%{search_query}%"))
+  if status_filters:
+    valid_statuses = []
+    for status_value in status_filters:
+      with contextlib.suppress(ValueError):
+        valid_statuses.append(ListingStatus(status_value))
+    if valid_statuses:
+      statement = statement.where(Listing.status.in_(valid_statuses))
+  if website_filters:
+    valid_ids = []
+    for website_value in website_filters:
+      with contextlib.suppress(ValueError):
+        valid_ids.append(int(website_value))
+    if valid_ids:
+      statement = statement.where(Listing.website_id.in_(valid_ids))
+  if type_filter:
+    try:
+      type_enum = ListingType(type_filter)
+      statement = statement.where(Listing.listing_type == type_enum)
+    except ValueError:
+      pass
+  if source_filter:
+    source_attr_name = f"source_search:{source_filter}"
+    source_subquery = (
+      select(ListingAttribute.listing_id)
+      .where(ListingAttribute.attribute_name == source_attr_name)
+    )
+    statement = statement.where(Listing.id.in_(source_subquery))
+
+  all_listings = session.execute(statement).scalars().unique().all()
+
+  sold_data = []
+  active_data = []
+  now = datetime.now(UTC)
+
+  for listing in all_listings:
+    price = listing.final_price or listing.current_price or listing.estimate_low
+    if price is None:
+      continue
+
+    total_cost = price
+    premium_percent = listing.effective_buyer_premium_percent
+    if premium_percent is not None:
+      total_cost += price * premium_percent / Decimal(100)
+    premium_fixed = listing.effective_buyer_premium_fixed
+    if premium_fixed is not None:
+      total_cost += premium_fixed
+    if listing.shipping_cost is not None:
+      total_cost += listing.shipping_cost
+
+    if listing.status == ListingStatus.SOLD:
+      sale_date = listing.end_time or listing.created_at
+      if sale_date and sale_date.tzinfo is None:
+        sale_date = sale_date.replace(tzinfo=UTC)
+      if sale_date and sale_date > now:
+        sale_date = now
+    elif listing.listing_type == ListingType.BUY_NOW:
+      sale_date = now
+    else:
+      sale_date = listing.end_time if listing.end_time else now
+      if sale_date and sale_date.tzinfo is None:
+        sale_date = sale_date.replace(tzinfo=UTC)
+
+    if sale_date is None:
+      sale_date = now
+
+    # Use stored EUR prices when available, otherwise skip non-EUR listings.
+    if listing.currency == "EUR":
+      total_cost_eur = total_cost
+    else:
+      stored_eur = (
+        listing.final_price_eur
+        if listing.final_price is not None
+        else listing.current_price_eur
+      )
+      if stored_eur is not None:
+        total_cost_eur = stored_eur
+        if premium_percent is not None:
+          total_cost_eur += stored_eur * premium_percent / Decimal(100)
+        if premium_fixed is not None:
+          total_cost_eur += premium_fixed
+      else:
+        continue
+
+    website_name = listing.website.name if listing.website else "Unknown"
+
+    image_url = None
+    if listing.images:
+      first_image = listing.images[0]
+      if first_image.local_path:
+        image_url = f"/images/{first_image.local_path}"
+      elif first_image.source_url:
+        image_url = first_image.source_url
+
+    display_title = listing.title[:60] + ("..." if len(listing.title) > 60 else "")
+    if listing.final_price is None and listing.current_price is None:
+      display_title += " (Est.)"
+
+    point_data = {
+      "x": sale_date.isoformat(),
+      "y": float(total_cost_eur),
+      "website": website_name,
+      "website_id": listing.website.id if listing.website else 0,
+      "title": display_title,
+      "listing_id": listing.id,
+      "image_url": image_url,
+    }
+
+    if listing.status == ListingStatus.SOLD:
+      sold_data.append(point_data)
+    elif listing.status in (ListingStatus.ACTIVE, ListingStatus.UPCOMING):
+      active_data.append(point_data)
+
+  return {"sold": sold_data, "active": active_data}

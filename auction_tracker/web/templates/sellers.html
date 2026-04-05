@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% set active_page = "sellers" %}
+{% block title %}Sellers – AuctionTracker{% endblock %}
+
+{% block content %}
+<hgroup>
+  <h1>Sellers</h1>
+  <p>{{ sellers|length }} seller{{ "s" if sellers|length != 1 else "" }} tracked</p>
+</hgroup>
+
+{% if sellers %}
+<div style="overflow-x: auto;">
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Username</th>
+        <th>Website</th>
+        <th>Country</th>
+        <th class="text-right">Rating</th>
+        <th class="text-right">Listings</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for seller in sellers %}
+      <tr class="clickable-row" onclick="location.href='/sellers/{{ seller.id }}'">
+        <td>{{ seller.display_name or seller.username }}</td>
+        <td class="muted">{{ seller.username }}</td>
+        <td>{{ seller.website.name if seller.website else "?" }}</td>
+        <td>{{ seller.country or "–" }}</td>
+        <td class="text-right">
+          {% if seller.rating is not none %}
+            {{ "%.1f"|format(seller.rating) }} &#9733;
+          {% else %}
+            &ndash;
+          {% endif %}
+        </td>
+        <td class="text-right">{{ seller.listings|length }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="muted">No sellers in the database yet.</p>
+{% endif %}
+{% endblock %}

@@ -348,7 +348,8 @@ def fetch_listing(app: AppContext, url: str, website: str) -> None:
 
 async def _fetch_async(app: AppContext, url: str, website: str) -> None:
   from auction_tracker.orchestrator.ingest import Ingest
-  from auction_tracker.parsing.base import ParserRegistry
+  from auction_tracker.orchestrator.utils import fetch_and_parse_listing
+  from auction_tracker.parsing.base import ParserBlocked, ParserRegistry
   from auction_tracker.transport.router import TransportRouter
 
   if not ParserRegistry.has(website):
@@ -358,8 +359,13 @@ async def _fetch_async(app: AppContext, url: str, website: str) -> None:
   parser = ParserRegistry.get(website)
 
   async with TransportRouter(app.config) as router:
-    result = await router.fetch(website, url)
-    scraped = parser.parse_listing(result.html)
+    try:
+      _result, scraped = await fetch_and_parse_listing(router, parser, website, url)
+    except ParserBlocked as blocked:
+      console.print(
+        f"[red]All domains returned a blocked/challenge page for {blocked.url}[/red]"
+      )
+      return
 
     with app.database.session() as session:
       website_obj = app.repository.get_website_by_name(session, website)
@@ -427,7 +433,7 @@ async def _search_async(
       try:
         search_url = parser.build_search_url(query)
         result = await router.fetch(website_name, search_url)
-        search_results = parser.parse_search_results(result.html)
+        search_results = parser.parse_search_results(result.html, url=search_url)
 
         console.print(f"  Found {len(search_results)} results")
 
@@ -598,6 +604,25 @@ async def _run_pipeline_async(
       except KeyboardInterrupt:
         stop_event.set()
         console.print("\n[yellow]Pipeline stopped.[/yellow]")
+
+
+# -------------------------------------------------------------------
+# Web frontend
+# -------------------------------------------------------------------
+
+
+@main.command("web")
+@click.option("--host", type=str, default="127.0.0.1", help="Bind address.")
+@click.option("--port", type=int, default=5000, help="Port to listen on.")
+@click.option("--debug", is_flag=True, default=False, help="Enable Flask debug mode.")
+@pass_context
+def run_web(app: AppContext, host: str, port: int, debug: bool) -> None:
+  """Start the web frontend for browsing the database."""
+  from auction_tracker.web.app import create_app
+
+  flask_app = create_app(config=app.config)
+  console.print(f"[green]Starting web UI at http://{host}:{port}[/green]")
+  flask_app.run(host=host, port=port, debug=debug)
 
 
 # -------------------------------------------------------------------

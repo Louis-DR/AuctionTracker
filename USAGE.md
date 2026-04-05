@@ -24,10 +24,10 @@ Every command accepts these options **before** the subcommand name:
 auction-tracker [OPTIONS] COMMAND [ARGS]...
 ```
 
-| Option | Default | Description |
-|---|---|---|
+| Option          | Default       | Description                                                                     |
+| --------------- | ------------- | ------------------------------------------------------------------------------- |
 | `--config PATH` | `config.yaml` | Path to YAML configuration file. Created automatically from defaults if absent. |
-| `--verbose` | off | Enable DEBUG-level logging to the console. |
+| `--verbose`     | off           | Enable DEBUG-level logging to the console.                                      |
 
 ---
 
@@ -117,11 +117,11 @@ Create a saved search query that will be run automatically by `discover` and `ru
 auction-tracker add-search QUERY [OPTIONS]
 ```
 
-| Argument / Option | Required | Description |
-|---|---|---|
-| `QUERY` | Yes | The search text (e.g. `"montblanc 149"`). Quote it if it contains spaces. |
-| `--name TEXT` | No | Display name for the search. Defaults to the query text. |
-| `--website TEXT` | No, repeatable | Restrict to one or more websites. Repeat the flag for multiple websites. Omit to create a cross-website search. |
+| Argument / Option | Required       | Description                                                                                                     |
+| ----------------- | -------------- | --------------------------------------------------------------------------------------------------------------- |
+| `QUERY`           | Yes            | The search text (e.g. `"montblanc 149"`). Quote it if it contains spaces.                                       |
+| `--name TEXT`     | No             | Display name for the search. Defaults to the query text.                                                        |
+| `--website TEXT`  | No, repeatable | Restrict to one or more websites. Repeat the flag for multiple websites. Omit to create a cross-website search. |
 
 **Examples:**
 
@@ -151,12 +151,12 @@ Run an ad-hoc search, display the results, and optionally ingest them into the d
 auction-tracker search QUERY [OPTIONS]
 ```
 
-| Argument / Option | Required | Description |
-|---|---|---|
-| `QUERY` | Yes | The search text. |
-| `--website TEXT` | No, repeatable | Only search on these websites. Defaults to all registered parsers. |
-| `--save` | No | Save the query as a saved search for future `discover` runs. |
-| `--fetch` / `--no-fetch` | No | After finding results, fetch each listing's full detail page. Default: `--no-fetch`. |
+| Argument / Option        | Required       | Description                                                                          |
+| ------------------------ | -------------- | ------------------------------------------------------------------------------------ |
+| `QUERY`                  | Yes            | The search text.                                                                     |
+| `--website TEXT`         | No, repeatable | Only search on these websites. Defaults to all registered parsers.                   |
+| `--save`                 | No             | Save the query as a saved search for future `discover` runs.                         |
+| `--fetch` / `--no-fetch` | No             | After finding results, fetch each listing's full detail page. Default: `--no-fetch`. |
 
 **Examples:**
 
@@ -181,10 +181,10 @@ Fetch and ingest a single listing from its URL. Useful for adding a specific lis
 auction-tracker fetch URL --website WEBSITE
 ```
 
-| Argument / Option | Required | Description |
-|---|---|---|
-| `URL` | Yes | Full URL of the listing page. |
-| `--website TEXT` | Yes | Website identifier (e.g. `ebay`, `catawiki`). |
+| Argument / Option | Required | Description                                   |
+| ----------------- | -------- | --------------------------------------------- |
+| `URL`             | Yes      | Full URL of the listing page.                 |
+| `--website TEXT`  | Yes      | Website identifier (e.g. `ebay`, `catawiki`). |
 
 **Example:**
 
@@ -204,9 +204,9 @@ Run all active saved searches, then optionally fetch full details for newly foun
 auction-tracker discover [OPTIONS]
 ```
 
-| Option | Default | Description |
-|---|---|---|
-| `--website TEXT` | all | Only run searches for this website. |
+| Option                   | Default   | Description                                                                        |
+| ------------------------ | --------- | ---------------------------------------------------------------------------------- |
+| `--website TEXT`         | all       | Only run searches for this website.                                                |
 | `--fetch` / `--no-fetch` | `--fetch` | After discovering new listings, fetch their full detail pages and classify images. |
 
 **Examples:**
@@ -237,10 +237,10 @@ Monitor all active (non-terminal) listings by polling their pages at the schedul
 auction-tracker watch [OPTIONS]
 ```
 
-| Option | Default | Description |
-|---|---|---|
-| `--website TEXT` | all | Only watch listings from this website. |
-| `--once` | off | Run a single pass through due listings, then exit. Default: run continuously until Ctrl+C. |
+| Option           | Default | Description                                                                                |
+| ---------------- | ------- | ------------------------------------------------------------------------------------------ |
+| `--website TEXT` | all     | Only watch listings from this website.                                                     |
+| `--once`         | off     | Run a single pass through due listings, then exit. Default: run continuously until Ctrl+C. |
 
 **Examples:**
 
@@ -257,12 +257,12 @@ auction-tracker watch --website ebay
 
 **Polling schedule for eBay (snapshot strategy):**
 
-| Phase | Condition | Poll interval |
-|---|---|---|
-| Routine | > 1h until end | Every 6 hours |
-| Approaching | 5 min–1h until end | Every 10 minutes |
-| Imminent | < 5 min until end | Every 60 seconds |
-| Ending | Past end time, result unknown | Every 2 minutes |
+| Phase       | Condition                     | Poll interval    |
+| ----------- | ----------------------------- | ---------------- |
+| Routine     | > 1h until end                | Every 6 hours    |
+| Approaching | 5 min–1h until end            | Every 10 minutes |
+| Imminent    | < 5 min until end             | Every 60 seconds |
+| Ending      | Past end time, result unknown | Every 2 minutes  |
 
 After 10 minutes in Ending with no terminal status, the listing is automatically marked `UNSOLD`.
 
@@ -280,15 +280,15 @@ No options. Reads from the database — does not require `watch` to be running.
 
 **Columns:**
 
-| Column | Description |
-|---|---|
-| ID | Internal database ID |
-| Website | e.g. `ebay` |
-| External ID | Website's listing ID |
-| Strategy | `snapshot`, `full`, or `post_auction` |
-| Phase | `routine`, `approaching`, `imminent`, `ending`, `waiting`, or `done` |
-| Next In | Time until next scheduled check (e.g. `4h`, `23m`, `45s`) |
-| Failures | Consecutive fetch failures (triggers cooldown at 5) |
+| Column      | Description                                                          |
+| ----------- | -------------------------------------------------------------------- |
+| ID          | Internal database ID                                                 |
+| Website     | e.g. `ebay`                                                          |
+| External ID | Website's listing ID                                                 |
+| Strategy    | `snapshot`, `full`, or `post_auction`                                |
+| Phase       | `routine`, `approaching`, `imminent`, `ending`, `waiting`, or `done` |
+| Next In     | Time until next scheduled check (e.g. `4h`, `23m`, `45s`)            |
+| Failures    | Consecutive fetch failures (triggers cooldown at 5)                  |
 
 ---
 
@@ -300,11 +300,11 @@ Display tracked listings from the database with filtering options.
 auction-tracker listings [OPTIONS]
 ```
 
-| Option | Default | Description |
-|---|---|---|
-| `--status TEXT` | all | Filter by status: `upcoming`, `active`, `sold`, `unsold`, `cancelled`, `relisted`, `unknown`. |
-| `--website TEXT` | all | Only show listings from this website. |
-| `--limit INT` | 50 | Maximum number of results to display. |
+| Option           | Default | Description                                                                                   |
+| ---------------- | ------- | --------------------------------------------------------------------------------------------- |
+| `--status TEXT`  | all     | Filter by status: `upcoming`, `active`, `sold`, `unsold`, `cancelled`, `relisted`, `unknown`. |
+| `--website TEXT` | all     | Only show listings from this website.                                                         |
+| `--limit INT`    | 50      | Maximum number of results to display.                                                         |
 
 **Examples:**
 
@@ -332,11 +332,11 @@ Run the full pipeline in sequence: discover new listings, fetch details and clas
 auction-tracker run [OPTIONS]
 ```
 
-| Option | Default | Description |
-|---|---|---|
-| `--website TEXT` | all | Only process this website. |
-| `--no-classify` | off | Skip image download and CLIP classification. |
-| `--once` | off | After discovery and fetch, do a single monitoring pass instead of looping. |
+| Option           | Default | Description                                                                |
+| ---------------- | ------- | -------------------------------------------------------------------------- |
+| `--website TEXT` | all     | Only process this website.                                                 |
+| `--no-classify`  | off     | Skip image download and CLIP classification.                               |
+| `--once`         | off     | After discovery and fetch, do a single monitoring pass instead of looping. |
 
 **Examples:**
 
@@ -439,6 +439,48 @@ websites:
 
 ---
 
+### `web`
+
+Start the web frontend for browsing the database. Provides a dashboard, listing browser with filters and price charts, individual listing detail pages with image galleries and bid history, seller and bidder views, and saved search statistics.
+
+```bash
+auction-tracker web [OPTIONS]
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `--host TEXT` | `127.0.0.1` | Bind address. Use `0.0.0.0` to allow external access. |
+| `--port INT` | `5000` | Port to listen on. |
+| `--debug` | off | Enable Flask debug mode (auto-reload on code changes). |
+
+**Examples:**
+
+```bash
+# Start on default port
+auction-tracker web
+
+# Custom port, accessible from other machines
+auction-tracker web --host 0.0.0.0 --port 8080
+
+# Development mode with auto-reload
+auction-tracker web --debug
+```
+
+**Pages available:**
+
+| URL | Description |
+|---|---|
+| `/` | Dashboard with aggregate statistics and recent listings |
+| `/listings` | Filterable, sortable listing browser with price history scatter plot and histogram |
+| `/listings/<id>` | Listing detail: image gallery, price info, bid history chart, price snapshots |
+| `/sellers` | Seller index with listing counts |
+| `/sellers/<id>` | Individual seller with their listings |
+| `/bidders` | Bidder index with win counts and total spent |
+| `/bidders/<username>` | Individual bidder: spending timeline chart, won items, bid history |
+| `/searches` | Saved search overview with verification/acceptance rate statistics |
+
+---
+
 ## Typical workflows
 
 ### First run from scratch
@@ -497,10 +539,10 @@ auction-tracker listings --status active --website ebay
 
 ## Exit codes
 
-| Code | Meaning |
-|---|---|
-| 0 | Success |
-| 1 | Unhandled exception (details in log) |
-| 2 | Invalid arguments (Click usage error) |
+| Code | Meaning                               |
+| ---- | ------------------------------------- |
+| 0    | Success                               |
+| 1    | Unhandled exception (details in log)  |
+| 2    | Invalid arguments (Click usage error) |
 
 Errors during fetch/parse/ingest are logged and counted but do not cause a non-zero exit — the tool is designed to continue past individual failures.

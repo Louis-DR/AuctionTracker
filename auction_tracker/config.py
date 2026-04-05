@@ -86,6 +86,9 @@ class WebsiteConfig(BaseModel):
   monitoring_strategy: MonitoringStrategy = MonitoringStrategy.SNAPSHOT
   historical_only: bool = False
   exclude_from_discovery: bool = False
+  # For multi-domain sites (e.g. eBay), the regional domain to use when
+  # building search URLs and as the preferred fetch domain.
+  preferred_domain: str | None = None
 
   @field_validator("request_delay", mode="before")
   @classmethod
@@ -179,6 +182,7 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     transport=TransportKind.HTTP,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
     request_delay=3.0,
+    preferred_domain="ebay.fr",
   ),
   "catawiki": WebsiteConfig(
     transport=TransportKind.HTTP,
@@ -235,6 +239,8 @@ class AppConfig(BaseModel):
   scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
   classifier: ClassifierConfig = Field(default_factory=ClassifierConfig)
   websites: dict[str, WebsiteConfig] = Field(default_factory=lambda: dict(_DEFAULT_WEBSITES))
+  # IANA timezone name used to display all datetimes in the web UI.
+  display_timezone: str = "Europe/Paris"
 
   def website(self, name: str) -> WebsiteConfig:
     """Get config for a website, falling back to defaults."""

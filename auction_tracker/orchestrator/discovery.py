@@ -17,7 +17,8 @@ from auction_tracker.config import AppConfig
 from auction_tracker.database.models import Listing, SearchQuery
 from auction_tracker.database.repository import Repository
 from auction_tracker.orchestrator.ingest import Ingest
-from auction_tracker.parsing.base import ParserRegistry
+from auction_tracker.orchestrator.utils import fetch_and_parse_listing
+from auction_tracker.parsing.base import ParserBlocked, ParserRegistry
 from auction_tracker.transport.router import TransportRouter
 
 logger = logging.getLogger(__name__)
@@ -117,14 +118,23 @@ class DiscoveryLoop:
     if not parser.capabilities.can_search:
       return []
 
-    search_url = parser.build_search_url(search_query.query_text)
+    search_kwargs: dict = {}
+    if website_config.preferred_domain:
+      search_kwargs["domain"] = website_config.preferred_domain
+    search_url = parser.build_search_url(search_query.query_text, **search_kwargs)
     logger.info(
       "Running search '%s' on %s: %s",
       search_query.name, website_name, search_url,
     )
 
     result = await self._router.fetch(website_name, search_url)
-    search_results = parser.parse_search_results(result.html)
+    try:
+      search_results = parser.parse_search_results(result.html, url=search_url)
+    except ParserBlocked:
+      logger.warning(
+        "Search URL blocked on %s: %s — skipping", website_name, search_url,
+      )
+      return []
     stats.searches_run += 1
     stats.results_found += len(search_results)
 
@@ -176,8 +186,9 @@ class DiscoveryLoop:
         continue
 
       try:
-        result = await self._router.fetch(website_name, listing.url)
-        scraped = parser.parse_listing(result.html)
+        _result, scraped = await fetch_and_parse_listing(
+          self._router, parser, website_name, listing.url,
+        )
         self._ingest.ingest_listing(session, listing.website_id, scraped)
         stats.listings_fetched += 1
 
