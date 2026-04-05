@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from auction_tracker.database.models import (
   BidEvent,
   Listing,
+  ListingAttribute,
   ListingImage,
   ListingStatus,
   PriceSnapshot,
@@ -310,6 +311,28 @@ class Repository:
   # -------------------------------------------------------------------
   # Search queries
   # -------------------------------------------------------------------
+
+  def upsert_listing_attribute(
+    self,
+    session: Session,
+    listing_id: int,
+    name: str,
+    value: str,
+  ) -> None:
+    """Create or update a single key/value attribute on a listing."""
+    statement = select(ListingAttribute).where(
+      ListingAttribute.listing_id == listing_id,
+      ListingAttribute.attribute_name == name,
+    )
+    attr = session.scalars(statement).first()
+    if attr is None:
+      session.add(ListingAttribute(
+        listing_id=listing_id,
+        attribute_name=name,
+        attribute_value=value,
+      ))
+    else:
+      attr.attribute_value = value
 
   def get_active_searches(self, session: Session) -> Sequence[SearchQuery]:
     statement = select(SearchQuery).where(SearchQuery.is_active.is_(True))

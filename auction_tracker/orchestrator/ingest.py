@@ -10,11 +10,13 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from auction_tracker.database.models import (
   ItemCondition,
   Listing,
+  ListingAttribute,
   ListingStatus,
   ListingType,
 )
@@ -67,11 +69,16 @@ class Ingest:
     session: Session,
     website_id: int,
     result: ScrapedSearchResult,
+    query_text: str | None = None,
   ) -> tuple[Listing, bool]:
     """Create or update a listing from a search result.
 
     Search results contain minimal data, so the listing is marked
-    as not fully fetched. Returns (listing, is_new).
+    as not fully fetched.  When ``query_text`` is provided, a
+    ``source_search:<query_text>`` attribute is attached so the
+    Searches page can aggregate results per query.
+
+    Returns (listing, is_new).
     """
     kwargs = {
       "current_price": result.current_price,
@@ -100,6 +107,23 @@ class Ingest:
       )
       if result.image_url:
         self._repo.sync_listing_images(session, listing.id, [result.image_url])
+
+    # Attach the source-search attribute regardless of whether the listing is
+    # new, so that re-discovered listings are also counted on the Searches page.
+    if query_text:
+      attr_name = f"source_search:{query_text}"
+      existing = session.execute(
+        select(ListingAttribute).where(
+          ListingAttribute.listing_id == listing.id,
+          ListingAttribute.attribute_name == attr_name,
+        )
+      ).scalar_one_or_none()
+      if existing is None:
+        session.add(ListingAttribute(
+          listing_id=listing.id,
+          attribute_name=attr_name,
+          attribute_value="1",
+        ))
 
     return listing, is_new
 

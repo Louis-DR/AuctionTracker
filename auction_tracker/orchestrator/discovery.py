@@ -212,6 +212,7 @@ class DiscoveryLoop:
     for scraped_result in search_results:
       listing, is_new = self._ingest.ingest_search_result(
         session, website_obj.id, scraped_result,
+        query_text=search_query.query_text,
       )
       if is_new:
         stats.new_listings += 1
@@ -299,6 +300,14 @@ class DiscoveryLoop:
               )
             if self._live:
               self._live.increment("classified")
+            # Persist classifier result as listing attributes so the
+            # Searches page can show accepted/rejected counts per query.
+            self._repo.upsert_listing_attribute(
+              session, listing.id, "classifier_score", f"{score:.4f}",
+            )
+            self._repo.upsert_listing_attribute(
+              session, listing.id, "classifier_accepted", "1" if is_relevant else "0",
+            )
             if not is_relevant:
               stats.listings_rejected += 1
               if self._live:
