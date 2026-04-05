@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from urllib.parse import urlparse
 
 from auction_tracker.transport.base import (
   FetchResult,
@@ -26,7 +27,7 @@ from auction_tracker.transport.base import (
 
 logger = logging.getLogger(__name__)
 
-# DataDome challenge markers (present in short captcha pages).
+# DataDome challenge markers (present in short captcha interstitials).
 _DATADOME_MARKERS = (
   "geo.captcha-delivery.com",
   "dd.js",
@@ -41,9 +42,12 @@ class BrowserTransport(Transport):
   first use and shut down on stop().
 
   Anti-bot features:
-  - playwright-stealth patches (navigator.webdriver, plugins, etc.)
-  - DataDome challenge detection and wait-for-resolution
-  - Automatic Didomi cookie consent dismissal
+  - playwright-stealth patches applied to the entire browser context
+    (navigator.webdriver, missing plugins, CDP exposure, etc.)
+  - --disable-blink-features=AutomationControlled Chrome flag
+  - DataDome challenge detection: waits up to 15 s for auto-resolution
+    before giving up (handles both HTTP 200 and 403 interstitials)
+  - Automatic Didomi / common cookie consent dismissal
   - Per-domain homepage warm-up to establish cookie sessions
   """
 
@@ -80,19 +84,13 @@ class BrowserTransport(Transport):
         "Install it with: pip install 'auction-tracker[browser]'"
       ) from error
 
-    # Check for stealth support.
-    try:
-      from playwright_stealth import stealth_async  # noqa: F401
-      self._stealth_available = True
-    except ImportError:
-      logger.info(
-        "playwright-stealth not installed; browser stealth patches disabled. "
-        "Install with: pip install playwright-stealth"
-      )
-
     self._playwright = await async_playwright().start()
     self._browser = await self._playwright.chromium.launch(
       headless=self._headless,
+      args=[
+        # Hide the automation flag that Chrome exposes by default.
+        "--disable-blink-features=AutomationControlled",
+      ],
     )
     self._context = await self._browser.new_context(
       user_agent=(
@@ -103,11 +101,43 @@ class BrowserTransport(Transport):
       viewport={"width": 1920, "height": 1080},
       locale="fr-FR",
     )
+
+    # Apply stealth patches to the whole context so that every page
+    # inherits them. The v2 API applies init scripts at context level.
+    self._stealth_available = await self._apply_stealth_to_context()
+
     self._semaphore = asyncio.Semaphore(self._max_pages)
     logger.info(
       "Browser transport started (headless=%s, max_pages=%d, stealth=%s)",
       self._headless, self._max_pages, self._stealth_available,
     )
+
+  async def _apply_stealth_to_context(self) -> bool:
+    """Apply playwright-stealth patches to the browser context.
+
+    Uses the v2 API: ``Stealth().apply_stealth_async(context)``.
+    Patches are injected as init scripts so every page opened from
+    this context is covered automatically.
+
+    Returns True if stealth was successfully applied.
+    """
+    try:
+      from playwright_stealth import Stealth
+      stealth = Stealth(
+        # Override navigator.languages to match the fr-FR locale we set.
+        navigator_languages_override=("fr-FR", "fr"),
+      )
+      await stealth.apply_stealth_async(self._context)
+      logger.debug("playwright-stealth v2 patches applied to browser context")
+      return True
+    except ImportError:
+      logger.info(
+        "playwright-stealth not installed; stealth patches disabled. "
+        "Install with: pip install playwright-stealth"
+      )
+    except Exception as error:
+      logger.warning("Failed to apply stealth patches: %s", error)
+    return False
 
   async def stop(self) -> None:
     if self._context is not None:
@@ -130,22 +160,12 @@ class BrowserTransport(Transport):
         await asyncio.sleep(self._request_delay - elapsed)
       self._last_request_time = time.monotonic()
 
-  async def _apply_stealth(self, page) -> None:
-    """Apply stealth patches to a page to evade bot detection."""
-    if not self._stealth_available:
-      return
-    try:
-      from playwright_stealth import stealth_async
-      await stealth_async(page)
-    except Exception as error:
-      logger.debug("Failed to apply stealth patches: %s", error)
-
   async def _warm_up_domain(self, page, domain: str) -> None:
     """Visit the domain homepage to establish cookies and sessions.
 
-    Only runs once per domain per browser session. This helps with
-    anti-bot systems that expect an initial homepage visit before
-    navigating to deep pages.
+    Only runs once per domain per browser session. Anti-bot systems
+    like DataDome track navigation patterns and expect an initial
+    homepage visit before accessing deep pages.
     """
     if domain in self._warmed_up_domains:
       return
@@ -154,11 +174,15 @@ class BrowserTransport(Transport):
     logger.info("Warming up browser session for %s", domain)
     try:
       await page.goto(homepage, wait_until="domcontentloaded", timeout=15_000)
+      with contextlib.suppress(Exception):
+        await page.wait_for_load_state("networkidle", timeout=5000)
       await asyncio.sleep(1.5)
       await self._dismiss_cookie_consent(page)
       self._warmed_up_domains.add(domain)
+      logger.debug("Warm-up complete for %s", domain)
     except Exception as error:
       logger.warning("Homepage warm-up for %s failed: %s", domain, error)
+      # Mark as done anyway so we don't keep retrying on every fetch.
       self._warmed_up_domains.add(domain)
 
   async def _dismiss_cookie_consent(self, page) -> None:
@@ -176,7 +200,7 @@ class BrowserTransport(Transport):
       "button:has-text('Accept')",
     ]
     for selector in consent_selectors:
-      try:
+      with contextlib.suppress(Exception):
         button = page.locator(selector).first
         if await button.is_visible(timeout=500):
           await asyncio.sleep(0.5)
@@ -184,16 +208,15 @@ class BrowserTransport(Transport):
           logger.debug("Dismissed cookie consent via %s", selector)
           await asyncio.sleep(0.5)
           return
-      except Exception:
-        continue
 
   async def _wait_for_datadome(self, page, max_wait: float = 15.0) -> None:
     """Detect DataDome challenge pages and wait for auto-resolution.
 
     DataDome interstitials are short pages (< 10 KB) containing
     captcha-delivery.com or dd.js markers. When the browser solves
-    the challenge automatically (e.g. via JavaScript), the page
-    reloads with the real content.
+    the challenge automatically, the page reloads with real content.
+    This can happen even on HTTP 403 responses — the 403 page carries
+    DataDome JS that resolves and redirects.
     """
     if not await self._is_datadome_challenge(page):
       return
@@ -212,29 +235,26 @@ class BrowserTransport(Transport):
   @staticmethod
   async def _is_datadome_challenge(page) -> bool:
     """Return True if the current page is a DataDome challenge."""
-    try:
+    with contextlib.suppress(Exception):
       content = await page.content()
       if len(content) > 10_000:
         return False
       lower_prefix = content[:5000].lower()
-      return any(
-        marker in lower_prefix for marker in _DATADOME_MARKERS
-      ) or "datadome" in lower_prefix[:3000]
-    except Exception:
-      return False
+      return (
+        any(marker in lower_prefix for marker in _DATADOME_MARKERS)
+        or "datadome" in lower_prefix[:3000]
+      )
+    return False
 
-  def _extract_domain(self, url: str) -> str | None:
+  @staticmethod
+  def _extract_domain(url: str) -> str | None:
     """Extract the bare domain (e.g. 'leboncoin.fr') from a URL."""
-    try:
-      from urllib.parse import urlparse
-      parsed = urlparse(url)
-      host = parsed.hostname or ""
-      # Strip www. prefix.
+    with contextlib.suppress(Exception):
+      host = urlparse(url).hostname or ""
       if host.startswith("www."):
         host = host[4:]
       return host if host else None
-    except Exception:
-      return None
+    return None
 
   async def fetch(self, url: str, **kwargs) -> FetchResult:
     if self._context is None:
@@ -249,9 +269,6 @@ class BrowserTransport(Transport):
       page = await self._context.new_page()
       start_time = time.monotonic()
       try:
-        await self._apply_stealth(page)
-
-        # Optionally warm up the domain on first visit.
         if warm_up:
           domain = self._extract_domain(url)
           if domain:
@@ -264,26 +281,36 @@ class BrowserTransport(Transport):
         )
 
         status_code = response.status if response else 0
-        if status_code in (403, 429, 503):
-          raise TransportBlocked(
-            f"Browser blocked by {url} (HTTP {status_code})",
-            url=url,
-            status_code=status_code,
-          )
 
         # Wait for network to settle (helps with JS-rendered content).
         with contextlib.suppress(Exception):
           await page.wait_for_load_state("networkidle", timeout=5000)
 
-        # Handle DataDome challenge if present.
+        # Handle DataDome challenge regardless of HTTP status code.
+        # A 403 from DataDome still delivers HTML that auto-resolves.
         await self._wait_for_datadome(page)
 
-        # Dismiss cookie consent after page loads.
+        # Dismiss cookie consent after any challenge has resolved.
         await self._dismiss_cookie_consent(page)
 
         html = await page.content()
         elapsed = time.monotonic() - start_time
         final_url = page.url
+
+        # Raise a persistent block only if the page is still a 403/429/503
+        # AND it did not resolve into real content.
+        if status_code in (403, 429, 503) and page.url == url:
+          # Check whether we actually got useful content.
+          if len(html) < 5000:
+            raise TransportBlocked(
+              f"Browser blocked by {url} (HTTP {status_code})",
+              url=url,
+              status_code=status_code,
+            )
+          logger.info(
+            "HTTP %d from %s resolved to %d bytes of content",
+            status_code, url, len(html),
+          )
 
         logger.debug(
           "Browser fetched %s (%d bytes, %.1fs)",
