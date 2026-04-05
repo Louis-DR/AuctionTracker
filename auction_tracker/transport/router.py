@@ -101,9 +101,11 @@ class TransportRouter:
     website_config = self._config.website(website_name)
     primary = await self._get_transport_async(website_config.transport)
 
-    # When the primary transport is browser, enable warm-up (homepage
-    # visit to establish cookies) unless the caller opts out.
-    if website_config.transport == TransportKind.BROWSER:
+    # Enable warm-up (homepage visit to establish cookies) for transports
+    # configured to need it. Both browser and HTTP transports support the
+    # warm_up kwarg; the HTTP version tracks already-warmed domains so
+    # the cost is paid only once per process lifetime.
+    if website_config.transport == TransportKind.BROWSER or website_config.http_warm_up:
       kwargs.setdefault("warm_up", True)
 
     try:

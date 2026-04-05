@@ -427,6 +427,8 @@ def _is_blocked_page(html: str) -> bool:
       "sign in", "se connecter", "einloggen", "accedi",
       "inicia sesión", "security measure",
       "pardon our interruption",
+      # eBay's bot-detection "sorry" page (200 OK but no real content).
+      "nous sommes désolés", "we are sorry",
     ]
     if any(marker in title_lower for marker in sign_in_markers):
       return True

@@ -95,6 +95,11 @@ class WebsiteConfig(BaseModel):
   # For multi-domain sites (e.g. eBay), the regional domain to use when
   # building search URLs and as the preferred fetch domain.
   preferred_domain: str | None = None
+  # When True, the HTTP transport makes a GET to the domain homepage
+  # before the first real request to establish session cookies. This
+  # avoids bot-detection "sorry" pages that eBay serves to cookieless
+  # sessions. Equivalent to the browser transport's domain warm-up.
+  http_warm_up: bool = False
 
   @field_validator("request_delay", mode="before")
   @classmethod
@@ -189,6 +194,7 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
     request_delay=3.0,
     preferred_domain="ebay.fr",
+    http_warm_up=True,
   ),
   "catawiki": WebsiteConfig(
     transport=TransportKind.HTTP,

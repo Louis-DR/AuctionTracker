@@ -8,8 +8,10 @@ websites that don't require a full browser.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
+from urllib.parse import urlparse
 
 from curl_cffi.requests import AsyncSession
 
@@ -53,6 +55,7 @@ class HttpTransport(Transport):
     self._session: AsyncSession | None = None
     self._rate_limit_lock = asyncio.Lock()
     self._last_request_time: float = 0.0
+    self._warmed_up_domains: set[str] = set()
 
   @property
   def name(self) -> str:
@@ -66,6 +69,25 @@ class HttpTransport(Transport):
       await self._session.close()
       self._session = None
 
+  async def _warm_up_domain(self, url: str) -> None:
+    """Visit the domain homepage once to establish session cookies.
+
+    Sites like eBay serve a bot-detection "sorry" page to cookieless
+    sessions. A single homepage GET sets the necessary cookies so that
+    subsequent requests look like a continuing browser session.
+    """
+    parsed = urlparse(url)
+    domain = parsed.netloc
+    if domain in self._warmed_up_domains:
+      return
+    homepage = f"{parsed.scheme}://{domain}/"
+    with contextlib.suppress(Exception):
+      await self._enforce_rate_limit()
+      await self._session.get(homepage, timeout=self._timeout, allow_redirects=True)
+      logger.debug("HTTP warm-up complete for %s", domain)
+    # Mark as warmed regardless of outcome so we don't retry infinitely.
+    self._warmed_up_domains.add(domain)
+
   async def _enforce_rate_limit(self) -> None:
     """Wait until enough time has passed since the last request."""
     async with self._rate_limit_lock:
@@ -78,6 +100,9 @@ class HttpTransport(Transport):
   async def fetch(self, url: str, **kwargs) -> FetchResult:
     if self._session is None:
       await self.start()
+
+    if kwargs.pop("warm_up", False):
+      await self._warm_up_domain(url)
 
     last_error: Exception | None = None
 
