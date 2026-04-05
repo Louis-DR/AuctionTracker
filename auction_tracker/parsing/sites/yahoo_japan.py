@@ -32,6 +32,7 @@ from auction_tracker.parsing.base import (
   Parser,
   ParserCapabilities,
   ParserRegistry,
+  check_html_for_blocking,
 )
 from auction_tracker.parsing.models import (
   ScrapedListing,
@@ -107,6 +108,7 @@ class YahooJapanParser(Parser):
   # ----------------------------------------------------------------
 
   def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
+    check_html_for_blocking(html, url=url)
     results: list[ScrapedSearchResult] = []
     cards = html.split('class="itemCard">')
 
@@ -155,6 +157,7 @@ class YahooJapanParser(Parser):
   # ----------------------------------------------------------------
 
   def parse_listing(self, html: str, url: str = "") -> ScrapedListing:
+    check_html_for_blocking(html, url=url)
     auction_id = _extract_auction_id_from_url(url) if url else ""
 
     title = _extract_title(html)

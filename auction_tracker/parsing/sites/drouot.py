@@ -36,7 +36,12 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote_plus, urlencode
 
-from auction_tracker.parsing.base import Parser, ParserCapabilities, ParserRegistry
+from auction_tracker.parsing.base import (
+  Parser,
+  ParserCapabilities,
+  ParserRegistry,
+  check_html_for_blocking,
+)
 from auction_tracker.parsing.models import (
   ScrapedListing,
   ScrapedSearchResult,
@@ -105,6 +110,7 @@ class DrouotParser(Parser):
 
   def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
     """Parse Drouot search page (SvelteKit SSR with embedded JS)."""
+    check_html_for_blocking(html, url=url)
     lots = _extract_search_lots(html)
     results: list[ScrapedSearchResult] = []
 
@@ -163,6 +169,7 @@ class DrouotParser(Parser):
     Tries the SvelteKit embedded ``lot:{...}`` first, then falls back
     to JSON-LD structured data.
     """
+    check_html_for_blocking(html, url=url)
     lot = _extract_lot_detail(html)
 
     if lot is not None:

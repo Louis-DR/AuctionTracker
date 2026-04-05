@@ -25,6 +25,8 @@ from auction_tracker.parsing.base import (
   Parser,
   ParserCapabilities,
   ParserRegistry,
+  check_html_for_blocking,
+  check_json_response_for_blocking,
 )
 from auction_tracker.parsing.models import (
   ScrapedListing,
@@ -95,8 +97,9 @@ class InvaluableParser(Parser):
     """Parse search results from JSON API response."""
     try:
       data = json.loads(raw)
-    except json.JSONDecodeError:
-      raise ValueError("Invaluable search response is not valid JSON")
+    except json.JSONDecodeError as error:
+      check_json_response_for_blocking(raw, url=url)
+      raise ValueError("Invaluable search response is not valid JSON") from error
 
     items = data.get("itemViewList") or []
     results: list[ScrapedSearchResult] = []
@@ -143,6 +146,7 @@ class InvaluableParser(Parser):
 
   def parse_listing(self, html: str, url: str = "") -> ScrapedListing:
     """Parse a lot detail page from embedded __PRELOADED_STATE__."""
+    check_html_for_blocking(html, url=url)
     preloaded = _extract_preloaded_state(html)
     if preloaded is None:
       raise ValueError(

@@ -200,6 +200,9 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     transport=TransportKind.HTTP,
     fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.FULL,
+    # Visit the Catawiki homepage first to establish session cookies,
+    # mirroring the eBay warm-up. If blocked, the browser fallback kicks in.
+    http_warm_up=True,
   ),
   "leboncoin": WebsiteConfig(
     # Try curl_cffi first (TLS fingerprint impersonation); fall back to

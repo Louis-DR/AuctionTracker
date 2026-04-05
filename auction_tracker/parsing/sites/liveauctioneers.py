@@ -27,6 +27,7 @@ from auction_tracker.parsing.base import (
   Parser,
   ParserCapabilities,
   ParserRegistry,
+  check_html_for_blocking,
 )
 from auction_tracker.parsing.models import (
   ScrapedListing,
@@ -87,6 +88,7 @@ class LiveAuctioneersParser(Parser):
   # ----------------------------------------------------------------
 
   def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
+    check_html_for_blocking(html, url=url)
     state = _extract_window_data(html)
     if state is None:
       raise ValueError(
@@ -136,6 +138,7 @@ class LiveAuctioneersParser(Parser):
   # ----------------------------------------------------------------
 
   def parse_listing(self, html: str, url: str = "") -> ScrapedListing:
+    check_html_for_blocking(html, url=url)
     state = _extract_window_data(html)
     if state is None:
       raise ValueError(

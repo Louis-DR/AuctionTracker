@@ -24,7 +24,13 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 
-from auction_tracker.parsing.base import Parser, ParserCapabilities, ParserRegistry
+from auction_tracker.parsing.base import (
+  Parser,
+  ParserCapabilities,
+  ParserRegistry,
+  check_html_for_blocking,
+  check_json_response_for_blocking,
+)
 from auction_tracker.parsing.models import (
   ScrapedBid,
   ScrapedListing,
@@ -113,6 +119,7 @@ class CatawikiParser(Parser):
     try:
       data = json.loads(text)
     except (json.JSONDecodeError, TypeError) as error:
+      check_json_response_for_blocking(text, url=url)
       raise ValueError(f"Catawiki search response is not valid JSON: {error}") from error
 
     results: list[ScrapedSearchResult] = []
@@ -148,6 +155,7 @@ class CatawikiParser(Parser):
     The HTML contains a ``<script id="__NEXT_DATA__">`` tag with all
     the structured data as JSON.
     """
+    check_html_for_blocking(html, url=url)
     page_props = _extract_page_props(html)
 
     lot_data = page_props.get("lotDetailsData", {})

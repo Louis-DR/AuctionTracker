@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import re
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -30,6 +31,77 @@ class ParserBlocked(Exception):
     super().__init__(message)
     self.url = url
     self.fallback_urls: list[str] = fallback_urls or []
+
+
+_BLOCKING_TITLES = (
+  # Cloudflare IUAM and challenge pages
+  "just a moment",
+  "attention required",
+  "please wait",
+  "checking your browser",
+  # Generic access denial
+  "access denied",
+  "403 forbidden",
+  "429 too many requests",
+  # Cloudflare-specific error codes
+  "error 1015",
+  "error 1020",
+)
+
+_BLOCKING_BODY_MARKERS = (
+  # Cloudflare challenge JS variable and verification classes
+  "_cf_chl_opt",
+  "cf-browser-verification",
+  "__cf_chl_f_tk",
+  # Visible Cloudflare identifiers that only appear on error/block pages
+  "ray id:",
+  # Generic captcha / human-verification
+  "verifying you are human",
+  "please enable cookies",
+)
+
+
+def check_html_for_blocking(html: str, url: str = "") -> None:
+  """Raise ``ParserBlocked`` if the page is a bot-detection challenge.
+
+  Covers Cloudflare IUAM / JS challenge pages and other common
+  anti-bot patterns. Safe to call on any HTML response — does nothing
+  when the page looks like genuine content.
+
+  Title-based detection is reliable at any page size. Body-marker
+  detection is restricted to small pages (< 20 KB) to avoid false
+  positives from legitimate content that may contain these strings
+  (e.g. a security blog post).
+  """
+  title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.DOTALL)
+  if title_match:
+    title_lower = title_match.group(1).lower().strip()
+    if any(marker in title_lower for marker in _BLOCKING_TITLES):
+      raise ParserBlocked(
+        f"Bot-detection page: {title_match.group(1).strip()!r}",
+        url=url,
+      )
+
+  if len(html) < 20_000:
+    lower_html = html.lower()
+    if any(marker in lower_html for marker in _BLOCKING_BODY_MARKERS):
+      raise ParserBlocked("Bot-detection challenge page", url=url)
+
+
+def check_json_response_for_blocking(raw: str, url: str = "") -> None:
+  """Raise ``ParserBlocked`` if an expected JSON response is actually HTML.
+
+  JSON API endpoints (e.g. Catawiki, Invaluable) normally return a
+  JSON object or array. When the endpoint is blocked it returns an
+  HTML challenge page instead. Call this when ``json.loads()`` fails
+  to distinguish a genuine parse error from a bot-detection redirect.
+  """
+  stripped = raw.lstrip()
+  if stripped.startswith(("{", "[")):
+    # Looks like JSON that failed to parse for a different reason.
+    return
+  # Not JSON — check whether it is an HTML blocking page.
+  check_html_for_blocking(raw, url=url)
 
 
 @dataclass(frozen=True)

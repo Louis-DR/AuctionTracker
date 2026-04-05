@@ -35,6 +35,7 @@ from auction_tracker.parsing.base import (
   Parser,
   ParserCapabilities,
   ParserRegistry,
+  check_html_for_blocking,
 )
 from auction_tracker.parsing.models import (
   ScrapedListing,
@@ -94,6 +95,7 @@ class InterencheresParser(Parser):
   # ----------------------------------------------------------------
 
   def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
+    check_html_for_blocking(html, url=url)
     nuxt_data = _parse_nuxt_payload(html)
     if nuxt_data is None:
       raise ValueError(
@@ -148,6 +150,7 @@ class InterencheresParser(Parser):
   # ----------------------------------------------------------------
 
   def parse_listing(self, html: str, url: str = "") -> ScrapedListing:
+    check_html_for_blocking(html, url=url)
     nuxt_data = _parse_nuxt_payload(html)
     if nuxt_data is None:
       raise ValueError(
