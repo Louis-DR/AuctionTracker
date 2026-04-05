@@ -100,6 +100,11 @@ class TransportRouter:
     website_config = self._config.website(website_name)
     primary = await self._get_transport_async(website_config.transport)
 
+    # When the primary transport is browser, enable warm-up (homepage
+    # visit to establish cookies) unless the caller opts out.
+    if website_config.transport == TransportKind.BROWSER:
+      kwargs.setdefault("warm_up", True)
+
     try:
       return await primary.fetch(url, **kwargs)
     except TransportBlocked:

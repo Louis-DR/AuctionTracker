@@ -431,6 +431,11 @@ websites:
   leboncoin:
     transport: browser       # LeBonCoin requires a full browser (DataDome)
     monitoring_strategy: snapshot
+    # Browser transport auto-warms up the domain (homepage visit) and
+    # uses playwright-stealth + DataDome challenge waiting.
+  drouot:
+    transport: http
+    monitoring_strategy: post_auction
   catawiki:
     transport: http
     fallback_transport: browser
@@ -447,11 +452,11 @@ Start the web frontend for browsing the database. Provides a dashboard, listing 
 auction-tracker web [OPTIONS]
 ```
 
-| Option | Default | Description |
-|---|---|---|
-| `--host TEXT` | `127.0.0.1` | Bind address. Use `0.0.0.0` to allow external access. |
-| `--port INT` | `5000` | Port to listen on. |
-| `--debug` | off | Enable Flask debug mode (auto-reload on code changes). |
+| Option        | Default     | Description                                            |
+| ------------- | ----------- | ------------------------------------------------------ |
+| `--host TEXT` | `127.0.0.1` | Bind address. Use `0.0.0.0` to allow external access.  |
+| `--port INT`  | `5000`      | Port to listen on.                                     |
+| `--debug`     | off         | Enable Flask debug mode (auto-reload on code changes). |
 
 **Examples:**
 
@@ -468,16 +473,16 @@ auction-tracker web --debug
 
 **Pages available:**
 
-| URL | Description |
-|---|---|
-| `/` | Dashboard with aggregate statistics and recent listings |
-| `/listings` | Filterable, sortable listing browser with price history scatter plot and histogram |
-| `/listings/<id>` | Listing detail: image gallery, price info, bid history chart, price snapshots |
-| `/sellers` | Seller index with listing counts |
-| `/sellers/<id>` | Individual seller with their listings |
-| `/bidders` | Bidder index with win counts and total spent |
-| `/bidders/<username>` | Individual bidder: spending timeline chart, won items, bid history |
-| `/searches` | Saved search overview with verification/acceptance rate statistics |
+| URL                   | Description                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| `/`                   | Dashboard with aggregate statistics and recent listings                            |
+| `/listings`           | Filterable, sortable listing browser with price history scatter plot and histogram |
+| `/listings/<id>`      | Listing detail: image gallery, price info, bid history chart, price snapshots      |
+| `/sellers`            | Seller index with listing counts                                                   |
+| `/sellers/<id>`       | Individual seller with their listings                                              |
+| `/bidders`            | Bidder index with win counts and total spent                                       |
+| `/bidders/<username>` | Individual bidder: spending timeline chart, won items, bid history                 |
+| `/searches`           | Saved search overview with verification/acceptance rate statistics                 |
 
 ---
 
@@ -491,6 +496,8 @@ auction-tracker seed-websites
 auction-tracker add-search "fountain pen" --website ebay
 auction-tracker add-search "montblanc" --website ebay
 auction-tracker add-search "pelikan souveran" --website ebay
+auction-tracker add-search "stylo plume" --website leboncoin
+auction-tracker add-search "stylo plume montblanc" --website catawiki
 auction-tracker run --once    # Test one full cycle
 auction-tracker listings      # Verify listings were ingested
 ```
@@ -511,7 +518,12 @@ auction-tracker run           # Loops until Ctrl+C
 ### Adding a specific listing manually
 
 ```bash
+# eBay listing
 auction-tracker fetch "https://www.ebay.com/itm/1234567890" --website ebay
+
+# LeBonCoin listing (requires browser transport — playwright must be installed)
+auction-tracker fetch "https://www.leboncoin.fr/ad/collection/2876543210.htm" --website leboncoin
+
 auction-tracker listings --status active
 ```
 
