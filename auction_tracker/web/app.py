@@ -1024,10 +1024,27 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           ),
         })
 
+      # Request type label mapping.
+      request_type_map = {
+        "search_run": "search",
+        "fetch_listing": "fetch",
+        "watch_check": "watch",
+      }
+
       hourly_new_listings: dict[str, int] = {}
       hourly_completed: dict[str, int] = {}
+      hourly_updated: dict[str, int] = {}
       hourly_errors: dict[str, int] = {}
       hourly_requests: dict[str, int] = {}
+      # {type_label: {bucket: count}} for stacked request-type bar.
+      hourly_requests_by_type: dict[str, dict[str, int]] = {
+        label: {} for label in request_type_map.values()
+      }
+      # {website: {bucket: count}} for stacked error-by-website bar.
+      hourly_errors_by_website: dict[str, dict[str, int]] = {}
+      # {source: {bucket: count}} for stacked error-by-source bar.
+      hourly_errors_by_source: dict[str, dict[str, int]] = {}
+
       for event in events_in_window:
         bucket = event.timestamp.strftime("%Y-%m-%d %H:00")
         if event.event_type == "search_run":
@@ -1040,10 +1057,52 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           hourly_completed[bucket] = (
             hourly_completed.get(bucket, 0) + detail.get("completed", 0)
           )
+          hourly_updated[bucket] = (
+            hourly_updated.get(bucket, 0) + detail.get("updated", 0)
+          )
         if event.event_type == "error":
           hourly_errors[bucket] = hourly_errors.get(bucket, 0) + 1
+          website = event.website_name or "unknown"
+          if website not in hourly_errors_by_website:
+            hourly_errors_by_website[website] = {}
+          hourly_errors_by_website[website][bucket] = (
+            hourly_errors_by_website[website].get(bucket, 0) + 1
+          )
+          detail = json.loads(event.detail_json) if event.detail_json else {}
+          source = detail.get("source", "unknown")
+          if source not in hourly_errors_by_source:
+            hourly_errors_by_source[source] = {}
+          hourly_errors_by_source[source][bucket] = (
+            hourly_errors_by_source[source].get(bucket, 0) + 1
+          )
         if event.event_type in request_types:
           hourly_requests[bucket] = hourly_requests.get(bucket, 0) + 1
+          type_label = request_type_map.get(event.event_type, "other")
+          hourly_requests_by_type[type_label][bucket] = (
+            hourly_requests_by_type[type_label].get(bucket, 0) + 1
+          )
+
+      # Sold / unsold per hour from the Listing table end_time.
+      hourly_sold: dict[str, int] = {}
+      hourly_unsold: dict[str, int] = {}
+      for (end_time,) in session.execute(
+        select(Listing.end_time)
+        .where(Listing.status == ListingStatus.SOLD)
+        .where(Listing.end_time.isnot(None))
+        .where(Listing.end_time >= since_naive)
+        .where(Listing.end_time <= now_naive)
+      ).all():
+        bucket = end_time.strftime("%Y-%m-%d %H:00")
+        hourly_sold[bucket] = hourly_sold.get(bucket, 0) + 1
+      for (end_time,) in session.execute(
+        select(Listing.end_time)
+        .where(Listing.status == ListingStatus.UNSOLD)
+        .where(Listing.end_time.isnot(None))
+        .where(Listing.end_time >= since_naive)
+        .where(Listing.end_time <= now_naive)
+      ).all():
+        bucket = end_time.strftime("%Y-%m-%d %H:00")
+        hourly_unsold[bucket] = hourly_unsold.get(bucket, 0) + 1
 
       time_labels = []
       cursor = since.replace(minute=0, second=0, microsecond=0)
@@ -1051,12 +1110,35 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         time_labels.append(cursor.strftime("%Y-%m-%d %H:00"))
         cursor += timedelta(hours=1)
 
+      def _ts(hourly: dict[str, int]) -> list[int]:
+        return [hourly.get(label, 0) for label in time_labels]
+
       timeseries_data = {
         "labels": time_labels,
-        "new_listings": [hourly_new_listings.get(label, 0) for label in time_labels],
-        "completed": [hourly_completed.get(label, 0) for label in time_labels],
-        "errors": [hourly_errors.get(label, 0) for label in time_labels],
-        "requests": [hourly_requests.get(label, 0) for label in time_labels],
+        "new_listings": _ts(hourly_new_listings),
+        "completed": _ts(hourly_completed),
+        "updated": _ts(hourly_updated),
+        "sold": _ts(hourly_sold),
+        "unsold": _ts(hourly_unsold),
+        "errors": _ts(hourly_errors),
+        "requests": _ts(hourly_requests),
+        "requests_by_type": {
+          label: _ts(buckets)
+          for label, buckets in hourly_requests_by_type.items()
+        },
+        "errors_by_website": {
+          website: _ts(buckets)
+          for website, buckets in hourly_errors_by_website.items()
+        },
+        "errors_by_source": {
+          source: _ts(buckets)
+          for source, buckets in hourly_errors_by_source.items()
+        },
+        "error_rate": [
+          round(hourly_errors.get(label, 0) / hourly_requests[label] * 100, 2)
+          if hourly_requests.get(label, 0) > 0 else 0
+          for label in time_labels
+        ],
       }
 
       recent_errors = []
@@ -1073,6 +1155,11 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       "pipeline_running": pipeline_running,
       "pipeline_last_activity": pipeline_last_activity,
       "event_type_counts": event_type_counts,
+      "request_type_counts": {
+        "search": event_type_counts.get("search_run", 0),
+        "fetch": event_type_counts.get("fetch_listing", 0),
+        "watch": event_type_counts.get("watch_check", 0),
+      },
       "website_request_counts": website_request_counts,
       "error_count": len(error_events),
       "error_by_source": error_by_source,

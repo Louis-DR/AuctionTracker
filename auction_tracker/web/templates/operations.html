@@ -78,6 +78,44 @@
   margin-top: 0;
 }
 
+/* Tabbed chart group. */
+.chart-tab-group {
+  border: 1px solid var(--pico-muted-border-color);
+  border-radius: var(--pico-border-radius);
+  padding: 0.75rem;
+}
+.chart-tab-group h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1em;
+}
+.chart-tab-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+.chart-tab-nav button {
+  padding: 0.2em 0.7em;
+  font-size: 0.8em;
+  border-radius: var(--pico-border-radius);
+  border: 1px solid var(--pico-muted-border-color);
+  background: transparent;
+  color: var(--pico-color);
+  cursor: pointer;
+  margin-bottom: 0;
+}
+.chart-tab-nav button.active {
+  background: var(--pico-primary);
+  border-color: var(--pico-primary);
+  color: var(--pico-primary-inverse);
+}
+.chart-tab-panel {
+  display: none;
+}
+.chart-tab-panel.active {
+  display: block;
+}
+
 /* Live status section */
 .live-section {
   margin-bottom: 2rem;
@@ -331,26 +369,71 @@
   </article>
 </div>
 
-<!-- Charts: two-column grid on wide screens -->
+<!-- Charts: two tabbed groups, two-column grid on wide screens -->
 <div class="chart-grid">
-  <div class="chart-grid-item">
-    <h2>Requests per Website (<span class="ops-hours-label-text">{{ hours_back }}</span>h)</h2>
-    <div class="chart-container">
-      <canvas id="requestsChart" height="220"></canvas>
+
+  <!-- Activity & Requests group -->
+  <div class="chart-grid-item chart-tab-group" id="group-activity">
+    <h2>Activity &amp; Requests (<span class="ops-hours-label-text">{{ hours_back }}</span>h)</h2>
+    <div class="chart-tab-nav" data-group="activity">
+      <button class="active" data-panel="activity-time">Over Time</button>
+      <button data-panel="activity-website">Per Website</button>
+      <button data-panel="activity-type">By Type</button>
+      <button data-panel="activity-completion">Completion</button>
+    </div>
+    <div class="chart-tab-panel active" id="panel-activity-time">
+      <div class="chart-container">
+        <canvas id="activityChart" height="220"></canvas>
+      </div>
+    </div>
+    <div class="chart-tab-panel" id="panel-activity-website">
+      <div class="chart-container">
+        <canvas id="requestsChart" height="220"></canvas>
+      </div>
+    </div>
+    <div class="chart-tab-panel" id="panel-activity-type">
+      <div class="chart-container">
+        <canvas id="requestTypesChart" height="220"></canvas>
+      </div>
+    </div>
+    <div class="chart-tab-panel" id="panel-activity-completion">
+      <div class="chart-container">
+        <canvas id="completionChart" height="220"></canvas>
+      </div>
     </div>
   </div>
-  <div class="chart-grid-item">
-    <h2>Activity Over Time</h2>
-    <div class="chart-container">
-      <canvas id="activityChart" height="220"></canvas>
+
+  <!-- Errors group -->
+  <div class="chart-grid-item chart-tab-group" id="group-errors">
+    <h2>Errors (<span class="ops-hours-label-text">{{ hours_back }}</span>h)</h2>
+    <div class="chart-tab-nav" data-group="errors">
+      <button class="active" data-panel="errors-time">Over Time</button>
+      <button data-panel="errors-website">By Website</button>
+      <button data-panel="errors-source">By Source</button>
+      <button data-panel="errors-rate">Error Rate</button>
+    </div>
+    <div class="chart-tab-panel active" id="panel-errors-time">
+      <div class="chart-container">
+        <canvas id="errorsChart" height="220"></canvas>
+      </div>
+    </div>
+    <div class="chart-tab-panel" id="panel-errors-website">
+      <div class="chart-container">
+        <canvas id="errorsWebsiteChart" height="220"></canvas>
+      </div>
+    </div>
+    <div class="chart-tab-panel" id="panel-errors-source">
+      <div class="chart-container">
+        <canvas id="errorsSourceChart" height="220"></canvas>
+      </div>
+    </div>
+    <div class="chart-tab-panel" id="panel-errors-rate">
+      <div class="chart-container">
+        <canvas id="errorRateChart" height="220"></canvas>
+      </div>
     </div>
   </div>
-  <div class="chart-grid-item">
-    <h2>Errors Over Time</h2>
-    <div class="chart-container">
-      <canvas id="errorsChart" height="220"></canvas>
-    </div>
-  </div>
+
 </div>
 
 <!-- Upcoming auctions (ending soonest) -->
@@ -519,84 +602,200 @@ function getWebsiteColor(label) {
   return _fallbackIndex[label];
 }
 
+// ---------------------------------------------------------------
+// Chart tab switching
+// ---------------------------------------------------------------
+function initChartTabs() {
+  document.querySelectorAll('.chart-tab-nav').forEach(nav => {
+    nav.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        // Deactivate all tabs/panels in this group.
+        nav.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        const group = nav.closest('.chart-tab-group');
+        group.querySelectorAll('.chart-tab-panel').forEach(p => p.classList.remove('active'));
+        // Activate clicked tab and its panel.
+        btn.classList.add('active');
+        const panel = document.getElementById('panel-' + btn.dataset.panel);
+        if (panel) {
+          panel.classList.add('active');
+          // Resize visible chart so it fills its container.
+          panel.querySelectorAll('canvas').forEach(canvas => {
+            const chartInstance = Chart.getChart(canvas);
+            if (chartInstance) chartInstance.resize();
+          });
+        }
+      });
+    });
+  });
+}
+initChartTabs();
+
+// ---------------------------------------------------------------
+// Chart initialization
+// ---------------------------------------------------------------
 const initialWebsiteData = {{ website_request_counts|tojson_safe }};
+const initialReqTypeData = {{ request_type_counts|tojson_safe }};
 const initialTimeseries = {{ timeseries_data|tojson_safe }};
 const initialShortLabels = initialTimeseries.labels.map(l => l.split(' ')[1] || l);
 
-const requestsChart = new Chart(document.getElementById('requestsChart'), {
-  type: 'bar',
-  data: {
-    labels: Object.keys(initialWebsiteData).sort(),
-    datasets: [{
-      label: 'Requests',
-      data: Object.keys(initialWebsiteData).sort().map(k => initialWebsiteData[k]),
-      backgroundColor: Object.keys(initialWebsiteData).sort().map(k => getWebsiteColor(k)),
-      borderRadius: 4,
-    }],
+// Shared chart options helpers.
+const lineOpts = (yLabel) => ({
+  responsive: true,
+  interaction: { intersect: false, mode: 'index' },
+  scales: {
+    y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: !!yLabel, text: yLabel } },
   },
-  options: {
-    responsive: true,
-    plugins: { legend: { display: false } },
-    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+  plugins: { legend: { position: 'top' } },
+});
+const barOpts = (stacked) => ({
+  responsive: true,
+  interaction: { intersect: false, mode: 'index' },
+  scales: {
+    x: { stacked: !!stacked },
+    y: { beginAtZero: true, stacked: !!stacked, ticks: { precision: 0 } },
   },
+  plugins: { legend: { position: 'top', display: !!stacked } },
 });
 
+// -- Activity over time (line) ---
 const activityChart = new Chart(document.getElementById('activityChart'), {
   type: 'line',
   data: {
     labels: initialShortLabels,
     datasets: [
-      {
-        label: 'New Listings',
-        data: initialTimeseries.new_listings,
-        borderColor: '#2ecc40',
-        backgroundColor: 'rgba(46, 204, 64, 0.1)',
-        fill: true, tension: 0.3,
-      },
-      {
-        label: 'Completed',
-        data: initialTimeseries.completed,
-        borderColor: '#0074d9',
-        backgroundColor: 'rgba(0, 116, 217, 0.1)',
-        fill: true, tension: 0.3,
-      },
-      {
-        label: 'Requests',
-        data: initialTimeseries.requests,
-        borderColor: '#aaa',
-        backgroundColor: 'rgba(170, 170, 170, 0.08)',
-        fill: true, tension: 0.3, borderDash: [4, 4],
-      },
+      { label: 'New Listings',  data: initialTimeseries.new_listings, borderColor: '#2ecc40', backgroundColor: 'rgba(46,204,64,0.1)',   fill: true, tension: 0.3 },
+      { label: 'Completed',     data: initialTimeseries.completed,    borderColor: '#0074d9', backgroundColor: 'rgba(0,116,217,0.1)',    fill: true, tension: 0.3 },
+      { label: 'Requests',      data: initialTimeseries.requests,     borderColor: '#aaa',    backgroundColor: 'rgba(170,170,170,0.06)', fill: true, tension: 0.3, borderDash: [4,4] },
     ],
   },
-  options: {
-    responsive: true,
-    interaction: { intersect: false, mode: 'index' },
-    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
-    plugins: { legend: { position: 'top' } },
-  },
+  options: lineOpts(''),
 });
 
+// -- Requests per website (horizontal bar) --
+const websiteLabels0 = Object.keys(initialWebsiteData).sort();
+const requestsChart = new Chart(document.getElementById('requestsChart'), {
+  type: 'bar',
+  data: {
+    labels: websiteLabels0,
+    datasets: [{ label: 'Requests', data: websiteLabels0.map(k => initialWebsiteData[k]), backgroundColor: websiteLabels0.map(k => getWebsiteColor(k)), borderRadius: 4 }],
+  },
+  options: { ...barOpts(false), indexAxis: 'y' },
+});
+
+// -- Requests by type (bar) --
+const reqTypeLabels0 = Object.keys(initialReqTypeData);
+const requestTypesChart = new Chart(document.getElementById('requestTypesChart'), {
+  type: 'bar',
+  data: {
+    labels: reqTypeLabels0.map(l => l.charAt(0).toUpperCase() + l.slice(1)),
+    datasets: [{
+      label: 'Requests',
+      data: reqTypeLabels0.map(k => initialReqTypeData[k]),
+      backgroundColor: ['#2ecc40', '#0074d9', '#ff851b'],
+      borderRadius: 4,
+    }],
+  },
+  options: barOpts(false),
+});
+
+// -- Completion status over time (line) --
+const completionChart = new Chart(document.getElementById('completionChart'), {
+  type: 'line',
+  data: {
+    labels: initialShortLabels,
+    datasets: [
+      { label: 'New Listings', data: initialTimeseries.new_listings, borderColor: '#2ecc40', backgroundColor: 'rgba(46,204,64,0.1)', fill: false, tension: 0.3 },
+      { label: 'Sold',         data: initialTimeseries.sold,         borderColor: '#0074d9', backgroundColor: 'rgba(0,116,217,0.1)', fill: false, tension: 0.3 },
+      { label: 'Unsold',       data: initialTimeseries.unsold,       borderColor: '#ff4136', backgroundColor: 'rgba(255,65,54,0.1)', fill: false, tension: 0.3 },
+      { label: 'Updated',      data: initialTimeseries.updated,      borderColor: '#ff851b', backgroundColor: 'rgba(255,133,27,0.1)', fill: false, tension: 0.3, borderDash: [3,3] },
+    ],
+  },
+  options: lineOpts(''),
+});
+
+// -- Errors over time (bar) --
 const errorsChart = new Chart(document.getElementById('errorsChart'), {
   type: 'bar',
   data: {
     labels: initialShortLabels,
+    datasets: [{ label: 'Errors', data: initialTimeseries.errors, backgroundColor: 'rgba(255,65,54,0.6)', borderColor: '#ff4136', borderWidth: 1, borderRadius: 2 }],
+  },
+  options: barOpts(false),
+});
+
+// -- Errors by website over time (stacked bar) --
+function buildStackedDatasets(byKey, colorFn) {
+  return Object.entries(byKey).map(([key, values]) => ({
+    label: key,
+    data: values,
+    backgroundColor: colorFn(key),
+    borderRadius: 2,
+    stack: 'stack',
+  }));
+}
+const errorsWebsiteChart = new Chart(document.getElementById('errorsWebsiteChart'), {
+  type: 'bar',
+  data: {
+    labels: initialShortLabels,
+    datasets: buildStackedDatasets(initialTimeseries.errors_by_website || {}, k => getWebsiteColor(k)),
+  },
+  options: barOpts(true),
+});
+
+// -- Errors by source over time (stacked bar) --
+const sourceColors = ['#ff4136','#ff851b','#b10dc9','#0074d9','#2ecc40','#aaa'];
+let sourceColorIdx = 0;
+const sourceColorMap = {};
+function getSourceColor(src) {
+  if (!sourceColorMap[src]) sourceColorMap[src] = sourceColors[sourceColorIdx++ % sourceColors.length];
+  return sourceColorMap[src];
+}
+const errorsSourceChart = new Chart(document.getElementById('errorsSourceChart'), {
+  type: 'bar',
+  data: {
+    labels: initialShortLabels,
+    datasets: buildStackedDatasets(initialTimeseries.errors_by_source || {}, k => getSourceColor(k)),
+  },
+  options: barOpts(true),
+});
+
+// -- Error rate over time (line, %) --
+const errorRateChart = new Chart(document.getElementById('errorRateChart'), {
+  type: 'line',
+  data: {
+    labels: initialShortLabels,
     datasets: [{
-      label: 'Errors',
-      data: initialTimeseries.errors,
-      backgroundColor: 'rgba(255, 65, 54, 0.6)',
+      label: 'Error Rate (%)',
+      data: initialTimeseries.error_rate,
       borderColor: '#ff4136',
-      borderWidth: 1, borderRadius: 2,
+      backgroundColor: 'rgba(255,65,54,0.1)',
+      fill: true, tension: 0.3,
     }],
   },
   options: {
     responsive: true,
+    interaction: { intersect: false, mode: 'index' },
+    scales: {
+      y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
+    },
     plugins: { legend: { display: false } },
-    scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
   },
 });
 
+// ---------------------------------------------------------------
+// Update all charts from fresh API data
+// ---------------------------------------------------------------
 function updateCharts(data) {
+  const ts = data.timeseries_data || {};
+  const shortLabels = (ts.labels || []).map(l => l.split(' ')[1] || l);
+
+  // Activity over time
+  activityChart.data.labels = shortLabels;
+  activityChart.data.datasets[0].data = ts.new_listings || [];
+  activityChart.data.datasets[1].data = ts.completed    || [];
+  activityChart.data.datasets[2].data = ts.requests     || [];
+  activityChart.update('none');
+
   // Requests per website
   const wData = data.website_request_counts || {};
   const wLabels = Object.keys(wData).sort();
@@ -605,19 +804,42 @@ function updateCharts(data) {
   requestsChart.data.datasets[0].backgroundColor = wLabels.map(k => getWebsiteColor(k));
   requestsChart.update('none');
 
-  // Activity over time
-  const ts = data.timeseries_data || {};
-  const shortLabels = (ts.labels || []).map(l => l.split(' ')[1] || l);
-  activityChart.data.labels = shortLabels;
-  activityChart.data.datasets[0].data = ts.new_listings || [];
-  activityChart.data.datasets[1].data = ts.completed || [];
-  activityChart.data.datasets[2].data = ts.requests || [];
-  activityChart.update('none');
+  // Requests by type
+  const rtData = data.request_type_counts || {};
+  const rtLabels = Object.keys(rtData);
+  requestTypesChart.data.labels = rtLabels.map(l => l.charAt(0).toUpperCase() + l.slice(1));
+  requestTypesChart.data.datasets[0].data = rtLabels.map(k => rtData[k]);
+  requestTypesChart.update('none');
 
-  // Errors
+  // Completion status
+  completionChart.data.labels = shortLabels;
+  completionChart.data.datasets[0].data = ts.new_listings || [];
+  completionChart.data.datasets[1].data = ts.sold    || [];
+  completionChart.data.datasets[2].data = ts.unsold  || [];
+  completionChart.data.datasets[3].data = ts.updated || [];
+  completionChart.update('none');
+
+  // Errors over time
   errorsChart.data.labels = shortLabels;
   errorsChart.data.datasets[0].data = ts.errors || [];
   errorsChart.update('none');
+
+  // Errors by website (stacked) — rebuild datasets when keys change
+  const ebwData = ts.errors_by_website || {};
+  errorsWebsiteChart.data.labels = shortLabels;
+  errorsWebsiteChart.data.datasets = buildStackedDatasets(ebwData, k => getWebsiteColor(k));
+  errorsWebsiteChart.update('none');
+
+  // Errors by source (stacked) — rebuild datasets when keys change
+  const ebsData = ts.errors_by_source || {};
+  errorsSourceChart.data.labels = shortLabels;
+  errorsSourceChart.data.datasets = buildStackedDatasets(ebsData, k => getSourceColor(k));
+  errorsSourceChart.update('none');
+
+  // Error rate
+  errorRateChart.data.labels = shortLabels;
+  errorRateChart.data.datasets[0].data = ts.error_rate || [];
+  errorRateChart.update('none');
 }
 
 // ---------------------------------------------------------------
