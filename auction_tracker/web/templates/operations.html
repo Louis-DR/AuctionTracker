@@ -99,15 +99,15 @@
   font-size: 0.8em;
   border-radius: var(--pico-border-radius);
   border: 1px solid var(--pico-muted-border-color);
-  background: transparent;
-  color: var(--pico-color);
+  background: rgba(128, 128, 128, 0.12);
+  color: var(--pico-contrast, #333);
   cursor: pointer;
   margin-bottom: 0;
 }
 .chart-tab-nav button.active {
   background: var(--pico-primary);
   border-color: var(--pico-primary);
-  color: var(--pico-primary-inverse);
+  color: #fff;
 }
 .chart-tab-panel {
   display: none;
@@ -410,7 +410,6 @@
       <button class="active" data-panel="errors-time">Over Time</button>
       <button data-panel="errors-website">By Website</button>
       <button data-panel="errors-source">By Source</button>
-      <button data-panel="errors-rate">Error Rate</button>
     </div>
     <div class="chart-tab-panel active" id="panel-errors-time">
       <div class="chart-container">
@@ -425,11 +424,6 @@
     <div class="chart-tab-panel" id="panel-errors-source">
       <div class="chart-container">
         <canvas id="errorsSourceChart" height="220"></canvas>
-      </div>
-    </div>
-    <div class="chart-tab-panel" id="panel-errors-rate">
-      <div class="chart-container">
-        <canvas id="errorRateChart" height="220"></canvas>
       </div>
     </div>
   </div>
@@ -682,7 +676,7 @@ const requestsChart = new Chart(document.getElementById('requestsChart'), {
   options: { ...barOpts(false), indexAxis: 'y' },
 });
 
-// -- Requests by type (bar) --
+// -- Requests by type (horizontal bar, mirrors "per website") --
 const reqTypeLabels0 = Object.keys(initialReqTypeData);
 const requestTypesChart = new Chart(document.getElementById('requestTypesChart'), {
   type: 'bar',
@@ -695,32 +689,60 @@ const requestTypesChart = new Chart(document.getElementById('requestTypesChart')
       borderRadius: 4,
     }],
   },
-  options: barOpts(false),
+  options: { ...barOpts(false), indexAxis: 'y' },
 });
 
-// -- Completion status over time (line) --
+// -- Completion status over time (sold vs unsold only) --
 const completionChart = new Chart(document.getElementById('completionChart'), {
   type: 'line',
   data: {
     labels: initialShortLabels,
     datasets: [
-      { label: 'New Listings', data: initialTimeseries.new_listings, borderColor: '#2ecc40', backgroundColor: 'rgba(46,204,64,0.1)', fill: false, tension: 0.3 },
-      { label: 'Sold',         data: initialTimeseries.sold,         borderColor: '#0074d9', backgroundColor: 'rgba(0,116,217,0.1)', fill: false, tension: 0.3 },
-      { label: 'Unsold',       data: initialTimeseries.unsold,       borderColor: '#ff4136', backgroundColor: 'rgba(255,65,54,0.1)', fill: false, tension: 0.3 },
-      { label: 'Updated',      data: initialTimeseries.updated,      borderColor: '#ff851b', backgroundColor: 'rgba(255,133,27,0.1)', fill: false, tension: 0.3, borderDash: [3,3] },
+      { label: 'Sold',   data: initialTimeseries.sold,   borderColor: '#2ecc40', backgroundColor: 'rgba(46,204,64,0.15)',  fill: true, tension: 0.3 },
+      { label: 'Unsold', data: initialTimeseries.unsold, borderColor: '#ff4136', backgroundColor: 'rgba(255,65,54,0.15)', fill: true, tension: 0.3 },
     ],
   },
   options: lineOpts(''),
 });
 
-// -- Errors over time (bar) --
+// -- Errors over time: bar (count, left Y) + line (rate %, right Y) --
 const errorsChart = new Chart(document.getElementById('errorsChart'), {
   type: 'bar',
   data: {
     labels: initialShortLabels,
-    datasets: [{ label: 'Errors', data: initialTimeseries.errors, backgroundColor: 'rgba(255,65,54,0.6)', borderColor: '#ff4136', borderWidth: 1, borderRadius: 2 }],
+    datasets: [
+      {
+        type: 'bar',
+        label: 'Error Count',
+        data: initialTimeseries.errors,
+        backgroundColor: 'rgba(255,65,54,0.55)',
+        borderColor: '#ff4136',
+        borderWidth: 1,
+        borderRadius: 2,
+        yAxisID: 'yCount',
+      },
+      {
+        type: 'line',
+        label: 'Error Rate (%)',
+        data: initialTimeseries.error_rate,
+        borderColor: '#ff851b',
+        backgroundColor: 'rgba(255,133,27,0.12)',
+        fill: false,
+        tension: 0.3,
+        pointRadius: 2,
+        yAxisID: 'yRate',
+      },
+    ],
   },
-  options: barOpts(false),
+  options: {
+    responsive: true,
+    interaction: { intersect: false, mode: 'index' },
+    scales: {
+      yCount: { beginAtZero: true, position: 'left',  ticks: { precision: 0 }, title: { display: true, text: 'Count' } },
+      yRate:  { beginAtZero: true, position: 'right', max: 100, grid: { drawOnChartArea: false }, ticks: { callback: v => v + '%' }, title: { display: true, text: 'Rate' } },
+    },
+    plugins: { legend: { position: 'top' } },
+  },
 });
 
 // -- Errors by website over time (stacked bar) --
@@ -759,29 +781,6 @@ const errorsSourceChart = new Chart(document.getElementById('errorsSourceChart')
   options: barOpts(true),
 });
 
-// -- Error rate over time (line, %) --
-const errorRateChart = new Chart(document.getElementById('errorRateChart'), {
-  type: 'line',
-  data: {
-    labels: initialShortLabels,
-    datasets: [{
-      label: 'Error Rate (%)',
-      data: initialTimeseries.error_rate,
-      borderColor: '#ff4136',
-      backgroundColor: 'rgba(255,65,54,0.1)',
-      fill: true, tension: 0.3,
-    }],
-  },
-  options: {
-    responsive: true,
-    interaction: { intersect: false, mode: 'index' },
-    scales: {
-      y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
-    },
-    plugins: { legend: { display: false } },
-  },
-});
-
 // ---------------------------------------------------------------
 // Update all charts from fresh API data
 // ---------------------------------------------------------------
@@ -811,17 +810,16 @@ function updateCharts(data) {
   requestTypesChart.data.datasets[0].data = rtLabels.map(k => rtData[k]);
   requestTypesChart.update('none');
 
-  // Completion status
+  // Completion status (sold / unsold only)
   completionChart.data.labels = shortLabels;
-  completionChart.data.datasets[0].data = ts.new_listings || [];
-  completionChart.data.datasets[1].data = ts.sold    || [];
-  completionChart.data.datasets[2].data = ts.unsold  || [];
-  completionChart.data.datasets[3].data = ts.updated || [];
+  completionChart.data.datasets[0].data = ts.sold   || [];
+  completionChart.data.datasets[1].data = ts.unsold || [];
   completionChart.update('none');
 
-  // Errors over time
+  // Errors over time (combo: count bar + rate line)
   errorsChart.data.labels = shortLabels;
-  errorsChart.data.datasets[0].data = ts.errors || [];
+  errorsChart.data.datasets[0].data = ts.errors     || [];
+  errorsChart.data.datasets[1].data = ts.error_rate || [];
   errorsChart.update('none');
 
   // Errors by website (stacked) — rebuild datasets when keys change
@@ -836,10 +834,6 @@ function updateCharts(data) {
   errorsSourceChart.data.datasets = buildStackedDatasets(ebsData, k => getSourceColor(k));
   errorsSourceChart.update('none');
 
-  // Error rate
-  errorRateChart.data.labels = shortLabels;
-  errorRateChart.data.datasets[0].data = ts.error_rate || [];
-  errorRateChart.update('none');
 }
 
 // ---------------------------------------------------------------
