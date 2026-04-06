@@ -215,25 +215,30 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
   ),
   "drouot": WebsiteConfig(
     transport=TransportKind.HTTP,
+    fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.POST_AUCTION,
   ),
   "interencheres": WebsiteConfig(
     transport=TransportKind.HTTP,
+    fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.POST_AUCTION,
     enabled=False,
   ),
   "liveauctioneers": WebsiteConfig(
     transport=TransportKind.HTTP,
+    fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.POST_AUCTION,
     enabled=False,
   ),
   "invaluable": WebsiteConfig(
     transport=TransportKind.HTTP,
+    fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.POST_AUCTION,
     enabled=False,
   ),
   "yahoo_japan": WebsiteConfig(
     transport=TransportKind.HTTP,
+    fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
     enabled=False,
   ),
