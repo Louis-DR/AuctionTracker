@@ -225,14 +225,18 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     enabled=False,
   ),
   "liveauctioneers": WebsiteConfig(
+    # React SPA behind Cloudflare — browser fallback also returns 502
+    # so HTTP-only is used; failing listings are skipped by the fetch
+    # loop's consecutive-error backoff.
     transport=TransportKind.HTTP,
-    fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.POST_AUCTION,
     enabled=False,
   ),
   "invaluable": WebsiteConfig(
+    # CDN/WAF blocks both curl_cffi (503) and Playwright (502).
+    # Browser fallback is pointless; the fetch loop's consecutive-error
+    # backoff prevents hammering unreachable listings.
     transport=TransportKind.HTTP,
-    fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.POST_AUCTION,
     enabled=False,
   ),

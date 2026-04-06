@@ -47,6 +47,11 @@ class DiscoveryLoop:
       stats = await loop.run_for_website(session, "ebay")
   """
 
+  # After this many consecutive transport errors, a listing is skipped
+  # for the remainder of the process lifetime to avoid hammering sites
+  # that block all automated access (e.g. Invaluable, LiveAuctioneers).
+  _MAX_CONSECUTIVE_ERRORS = 3
+
   def __init__(
     self,
     config: AppConfig,
@@ -61,6 +66,8 @@ class DiscoveryLoop:
     self._ingest = Ingest(repository)
     self._metrics = metrics
     self._live = live
+    # listing_id -> consecutive fetch-error count (reset on success).
+    self._fetch_error_counts: dict[int, int] = {}
 
   async def run_all(
     self,
@@ -268,6 +275,14 @@ class DiscoveryLoop:
       if not parser.capabilities.can_parse_listing:
         continue
 
+      # Skip listings that have already hit the consecutive-error cap.
+      if self._fetch_error_counts.get(listing.id, 0) >= self._MAX_CONSECUTIVE_ERRORS:
+        logger.debug(
+          "Skipping %s — %d consecutive fetch errors (site may be blocking all transports)",
+          listing.external_id, self._MAX_CONSECUTIVE_ERRORS,
+        )
+        continue
+
       if self._live:
         self._live.fetch_progress(batch_index, listing.external_id, website_name)
 
@@ -276,6 +291,8 @@ class DiscoveryLoop:
           self._router, parser, website_name, listing.url,
         )
         self._ingest.ingest_listing(session, listing.website_id, scraped)
+        # Reset error counter on success.
+        self._fetch_error_counts.pop(listing.id, None)
         stats.listings_fetched += 1
         if self._metrics:
           self._metrics.fetch_listing(website_name, listing.external_id)
@@ -326,11 +343,21 @@ class DiscoveryLoop:
       except Exception as exc:
         session.rollback()
         stats.errors += 1
-        logger.error(
-          "Error fetching listing %s",
-          listing.external_id,
-          exc_info=True,
+        self._fetch_error_counts[listing.id] = (
+          self._fetch_error_counts.get(listing.id, 0) + 1
         )
+        error_count = self._fetch_error_counts[listing.id]
+        if error_count >= self._MAX_CONSECUTIVE_ERRORS:
+          logger.warning(
+            "Listing %s failed %d times in a row — backing off for this session: %s",
+            listing.external_id, error_count, exc,
+          )
+        else:
+          logger.error(
+            "Error fetching listing %s",
+            listing.external_id,
+            exc_info=True,
+          )
         if self._metrics:
           self._metrics.error("fetch", str(exc), website_name=website_name)
         if self._live:
