@@ -1217,16 +1217,22 @@ function refreshClassCategoriesData(categories, startIndex) {
     return;
   }
   classCategoriesLastData = categories;
-  // Ascending by count so Chart.js (indexAxis y, reverse false) puts largest at top.
-  const sortedPairs = categories.map(c => [c[0], c[1]]).sort((a, b) => a[1] - b[1]);
-  const labels = sortedPairs.map(p => p[0]);
-  const counts = sortedPairs.map(p => p[1]);
+  // Sort ascending by total so Chart.js (indexAxis y, reverse false) shows
+  // the highest-count category at the top of the chart.
+  const sorted = categories
+    .map(c => ({ label: c.label, accepted: c.accepted || 0, rejected: c.rejected || 0 }))
+    .sort((a, b) => (a.accepted + a.rejected) - (b.accepted + b.rejected));
+  const labels    = sorted.map(c => c.label);
+  const accepted  = sorted.map(c => c.accepted);
+  const rejected  = sorted.map(c => c.rejected);
+  const totals    = sorted.map(c => c.accepted + c.rejected);
   classCategoriesChart.data.labels = labels;
-  classCategoriesChart.data.datasets[0].data = counts;
+  classCategoriesChart.data.datasets[0].data = accepted;
+  classCategoriesChart.data.datasets[1].data = rejected;
   const count = labels.length;
   const yScale = classCategoriesChart.options.scales.y;
   const xScale = classCategoriesChart.options.scales.x;
-  const maxListings = count ? Math.max(...counts) : 1;
+  const maxListings = count ? Math.max(...totals) : 1;
   xScale.min = 0;
   xScale.max = maxListings;
   if (count === 0) {
@@ -1277,12 +1283,26 @@ function refreshClassCategoriesData(categories, startIndex) {
     type: 'bar',
     data: {
       labels: [],
-      datasets: [{
-        label: 'Listings',
-        data: [],
-        backgroundColor: '#7c3aed',
-        borderRadius: 3,
-      }],
+      datasets: [
+        {
+          label: 'Accepted',
+          data: [],
+          backgroundColor: 'rgba(46,204,64,0.75)',
+          borderColor: '#2ecc40',
+          borderWidth: 1,
+          borderRadius: 3,
+          stack: 'cats',
+        },
+        {
+          label: 'Rejected',
+          data: [],
+          backgroundColor: 'rgba(255,65,54,0.65)',
+          borderColor: '#ff4136',
+          borderWidth: 1,
+          borderRadius: 3,
+          stack: 'cats',
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -1297,6 +1317,7 @@ function refreshClassCategoriesData(categories, startIndex) {
       scales: {
         x: {
           type: 'linear',
+          stacked: true,
           beginAtZero: true,
           min: 0,
           grace: 0,
@@ -1304,12 +1325,19 @@ function refreshClassCategoriesData(categories, startIndex) {
           title: { display: true, text: 'Listings' },
         },
         y: {
+          stacked: true,
           reverse: false,
           ticks: { autoSkip: false },
         },
       },
       layout: { padding: { left: 4, right: 2, bottom: 4 } },
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: {
+          display: true,
+          position: 'top',
+          labels: { boxWidth: 12, padding: 10, font: { size: 11 } },
+        },
+      },
     },
   });
   if (classCategoriesVscrollWrap) {

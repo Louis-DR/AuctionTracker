@@ -1587,22 +1587,28 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
 
       accepted_scores: list[float] = []
       rejected_scores: list[float] = []
-      top_class_counts: dict[str, int] = {}
+      # Per-category accepted and rejected counts — all listings regardless
+      # of threshold, so the chart reflects the true distribution.
+      top_class_counts: dict[str, dict[str, int]] = {}
       for _listing_id, attrs in classifier_by_listing.items():
         score_str = attrs.get("classifier_score")
         accepted_str = attrs.get("classifier_accepted")
         if score_str is None:
           continue
         score = float(score_str)
-        if accepted_str == "1":
+        accepted = accepted_str == "1"
+        if accepted:
           accepted_scores.append(score)
         else:
           rejected_scores.append(score)
         top_class = attrs.get("classifier_top_class")
-        if top_class and score >= config.classifier.threshold:
-          top_class_counts[top_class] = (
-            top_class_counts.get(top_class, 0) + 1
-          )
+        if top_class:
+          if top_class not in top_class_counts:
+            top_class_counts[top_class] = {"accepted": 0, "rejected": 0}
+          if accepted:
+            top_class_counts[top_class]["accepted"] += 1
+          else:
+            top_class_counts[top_class]["rejected"] += 1
 
       num_bins = 20
       score_histogram = {
@@ -1621,8 +1627,15 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         score_histogram["rejected"][bin_index] += 1
 
       top_categories = sorted(
-        top_class_counts.items(),
-        key=lambda pair: pair[1],
+        [
+          {
+            "label": label,
+            "accepted": counts["accepted"],
+            "rejected": counts["rejected"],
+          }
+          for label, counts in top_class_counts.items()
+        ],
+        key=lambda entry: entry["accepted"] + entry["rejected"],
         reverse=True,
       )
 
