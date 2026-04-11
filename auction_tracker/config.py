@@ -173,6 +173,7 @@ class SchedulerConfig(BaseModel):
   phase_timeout: float = 600.0
   consecutive_failure_threshold: int = 5
   failure_cooldown: float = 300.0
+  late_watch_threshold: float = 300.0
 
   full: FullStrategyConfig = Field(default_factory=FullStrategyConfig)
   snapshot: SnapshotStrategyConfig = Field(default_factory=SnapshotStrategyConfig)
@@ -180,7 +181,7 @@ class SchedulerConfig(BaseModel):
 
   @field_validator(
     "discovery_interval", "daily_refresh_interval", "phase_timeout",
-    "failure_cooldown",
+    "failure_cooldown", "late_watch_threshold",
     mode="before",
   )
   @classmethod
@@ -206,10 +207,14 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     http_warm_up=True,
   ),
   "leboncoin": WebsiteConfig(
-    # DataDome blocks curl_cffi and Playwright Chromium reliably.
+    # DataDome blocks curl_cffi and vanilla Playwright Chromium.
     # Camoufox (Firefox fork with C++ fingerprint masking, humanize,
-    # and persistent profiles) is the only transport that works.
+    # persistent profiles, WebRTC blocking, and COOP disabling) is
+    # the primary transport. If Camoufox is blocked, the browser
+    # fallback uses rebrowser-playwright (CDP leak patches) which
+    # can sometimes succeed where Camoufox fails.
     transport=TransportKind.CAMOUFOX,
+    fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
     request_delay=4.0,
   ),
@@ -264,6 +269,23 @@ class ClassifierConfig(BaseModel):
   max_images_per_listing: int = 3
 
 
+class DisplayConfig(BaseModel):
+  """Web UI display defaults for the price scatter chart."""
+  chart_time_start: str | None = Field(
+    default=None,
+    description="Default start date (ISO, e.g. '2024-06-01'). "
+    "None uses the earliest data point.",
+  )
+  chart_price_min: float | None = Field(
+    default=None,
+    description="Default minimum price filter. None uses data minimum.",
+  )
+  chart_price_max: float | None = Field(
+    default=None,
+    description="Default maximum price filter. None uses data maximum.",
+  )
+
+
 class AppConfig(BaseModel):
   """Root application configuration."""
   database: DatabaseConfig = Field(default_factory=DatabaseConfig)
@@ -271,9 +293,14 @@ class AppConfig(BaseModel):
   transport: TransportConfig = Field(default_factory=TransportConfig)
   scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
   classifier: ClassifierConfig = Field(default_factory=ClassifierConfig)
+  display: DisplayConfig = Field(default_factory=DisplayConfig)
   websites: dict[str, WebsiteConfig] = Field(default_factory=lambda: dict(_DEFAULT_WEBSITES))
   # IANA timezone name used to display all datetimes in the web UI.
   display_timezone: str = "Europe/Paris"
+  # ISO 4217 currency code used to display all prices in the web UI.
+  # The database always stores EUR-converted prices; if this is set to
+  # a different currency, the web layer converts from EUR at display time.
+  display_currency: str = "EUR"
 
   def website(self, name: str) -> WebsiteConfig:
     """Get config for a website, falling back to defaults."""

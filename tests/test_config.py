@@ -63,4 +63,4 @@ class TestAppConfig:
     config = AppConfig()
     leboncoin = config.website("leboncoin")
     assert leboncoin.transport == TransportKind.CAMOUFOX
-    assert leboncoin.fallback_transport is None
+    assert leboncoin.fallback_transport == TransportKind.BROWSER
