@@ -214,7 +214,9 @@ class DrouotParser(Parser):
     )
     estimate_low = _decimal_or_none(lot.get("lowEstim"))
     estimate_high = _decimal_or_none(lot.get("highEstim"))
-    sale_fees = _decimal_or_none(lot.get("saleFees") or lot.get("fees"))
+    sale_fees = _normalize_percent_value(
+      _decimal_or_none(lot.get("saleFees") or lot.get("fees"))
+    )
 
     # -- Timing --
     start_time = _timestamp_to_datetime(lot.get("date"))
@@ -724,6 +726,40 @@ def _decimal_or_none(value) -> Decimal | None:
     return decimal_value
   except (InvalidOperation, ValueError, TypeError):
     return None
+
+
+def _normalize_percent_value(value: Decimal | None) -> Decimal | None:
+  """Normalize percent values that are sometimes scaled by 100 or 1000.
+
+  Drouot usually exposes buyer fees as a percent (e.g. 26 or 25.5). In some
+  cases we have observed values that look like an already-percent value that
+  was multiplied again (e.g. 26000 instead of 26).
+  """
+  if value is None:
+    return None
+
+  if value <= 0:
+    return None
+
+  if value <= 100:
+    return value
+
+  normalized = value
+
+  for divisor in (Decimal(1000), Decimal(100)):
+    candidate = normalized / divisor
+    if candidate <= 100:
+      normalized = candidate
+      break
+
+  if normalized > 100:
+    logger.warning(
+      "Ignoring implausible percent value: %s",
+      value,
+    )
+    return None
+
+  return normalized
 
 
 def _timestamp_to_datetime(timestamp: int | None) -> datetime | None:

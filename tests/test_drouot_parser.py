@@ -176,6 +176,11 @@ class TestActiveLotParsing:
     listing = parser.parse_listing(html)
     assert listing.buyer_premium_percent == Decimal("25.5")
 
+  def test_active_lot_buyer_premium_scaled(self, parser: DrouotParser):
+    html = _read_fixture("lot_active_scaled_fees.html")
+    listing = parser.parse_listing(html)
+    assert listing.buyer_premium_percent == Decimal("26")
+
   def test_active_lot_timing(self, parser: DrouotParser):
     html = _read_fixture("lot_active.html")
     listing = parser.parse_listing(html)
