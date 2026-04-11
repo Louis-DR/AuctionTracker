@@ -214,6 +214,16 @@ class Scheduler:
       phase=Phase.ROUTINE,
     )
 
+  def ending_max_wait(self, strategy: MonitoringStrategy) -> float:
+    """Maximum seconds a listing may stay in ENDING before being marked UNSOLD."""
+    if strategy == MonitoringStrategy.FULL:
+      return self._config.full.ending_max_wait
+    if strategy == MonitoringStrategy.SNAPSHOT:
+      return self._config.snapshot.ending_max_wait
+    if strategy == MonitoringStrategy.POST_AUCTION:
+      return self._config.post_auction.max_wait
+    return 3600.0
+
   def _schedule_post_auction(self, tracked: TrackedListing, now: float) -> CheckSchedule:
     """Schedule for POST_AUCTION strategy (e.g. Drouot, Invaluable).
 
