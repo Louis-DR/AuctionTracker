@@ -7,7 +7,6 @@ database engine, and repository. Async commands use asyncio.run().
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from pathlib import Path
 
@@ -234,7 +233,14 @@ async def _discover_async(app: AppContext, website: str | None, fetch: bool) -> 
   from auction_tracker.transport.router import TransportRouter
 
   async with TransportRouter(app.config) as router:
-    loop = DiscoveryLoop(app.config, router, app.repository)
+    from auction_tracker.currency import CurrencyConverter
+
+    converter = CurrencyConverter(
+      cache_path=app.config.database.path.parent / "exchange_rates.json",
+    )
+    loop = DiscoveryLoop(
+      app.config, router, app.repository, converter=converter,
+    )
     with app.database.session() as session:
       stats, _new_listings = await loop.run_all(session, website_filter=website)
       console.print(
@@ -269,7 +275,15 @@ async def _watch_async(app: AppContext, website: str | None, once: bool) -> None
   from auction_tracker.transport.router import TransportRouter
 
   async with TransportRouter(app.config) as router:
-    watcher = Watcher(app.config, app.database, router, app.repository)
+    from auction_tracker.currency import CurrencyConverter
+
+    converter = CurrencyConverter(
+      cache_path=app.config.database.path.parent / "exchange_rates.json",
+    )
+    watcher = Watcher(
+      app.config, app.database, router, app.repository,
+      converter=converter,
+    )
     with app.database.session() as session:
       count = watcher.load_active_listings(session)
       console.print(f"[green]Loaded {count} active listings into watch queue.[/green]")
@@ -300,7 +314,9 @@ def show_queue(app: AppContext) -> None:
   from auction_tracker.orchestrator.watcher import Watcher
   from auction_tracker.transport.router import TransportRouter
 
-  watcher = Watcher(app.config, app.database, TransportRouter(app.config), app.repository)
+  watcher = Watcher(
+    app.config, app.database, TransportRouter(app.config), app.repository,
+  )
   with app.database.session() as session:
     watcher.load_active_listings(session)
 
@@ -374,7 +390,12 @@ async def _fetch_async(app: AppContext, url: str, website: str) -> None:
         console.print(f"[red]Website '{website}' not in database. Run seed-websites first.[/red]")
         return
 
-      ingest = Ingest(app.repository)
+      from auction_tracker.currency import CurrencyConverter
+
+      converter = CurrencyConverter(
+        cache_path=app.config.database.path.parent / "exchange_rates.json",
+      )
+      ingest = Ingest(app.repository, converter=converter)
       _listing, is_new = ingest.ingest_listing(session, website_obj.id, scraped)
       session.commit()
 
@@ -415,7 +436,12 @@ async def _search_async(
   target_websites = list(websites) if websites else ParserRegistry.list_registered()
 
   async with TransportRouter(app.config) as router:
-    ingest = Ingest(app.repository)
+    from auction_tracker.currency import CurrencyConverter
+
+    converter = CurrencyConverter(
+      cache_path=app.config.database.path.parent / "exchange_rates.json",
+    )
+    ingest = Ingest(app.repository, converter=converter)
 
     for website_name in target_websites:
       if not ParserRegistry.has(website_name):
@@ -524,14 +550,7 @@ def add_search(app: AppContext, query: str, name: str | None) -> None:
   type=int,
   default=30,
   show_default=True,
-  help="Minutes between re-discovery runs in continuous mode.",
-)
-@click.option(
-  "--max-fetch-per-cycle",
-  type=int,
-  default=50,
-  show_default=True,
-  help="Max listings to fully fetch per discovery cycle (rest deferred to next cycle).",
+  help="Minutes between search cycles in continuous mode.",
 )
 @pass_context
 def run_pipeline(
@@ -540,18 +559,17 @@ def run_pipeline(
   no_classify: bool,
   once: bool,
   discover_interval: int,
-  max_fetch_per_cycle: int,
 ) -> None:
   """Run the full pipeline: discover, fetch, classify, and watch.
 
-  In continuous mode (default) the pipeline re-runs saved searches
-  every --discover-interval minutes so that new listings are found
-  throughout the day, while the watch loop monitors existing listings
-  concurrently.
+  Each enabled website gets its own async worker that interleaves
+  search, fetch, and watch operations within that website's rate
+  budget.  All website workers run concurrently so that different
+  sites never block each other.
   """
   asyncio.run(
     _run_pipeline_async(
-      app, website, not no_classify, once, discover_interval, max_fetch_per_cycle,
+      app, website, not no_classify, once, discover_interval,
     )
   )
 
@@ -562,12 +580,9 @@ async def _run_pipeline_async(
   classify: bool,
   once: bool,
   discover_interval: int,
-  max_fetch_per_cycle: int,
 ) -> None:
-  from auction_tracker.orchestrator.discovery import DiscoveryLoop
   from auction_tracker.orchestrator.metrics import LiveStatus, MetricsCollector
-  from auction_tracker.orchestrator.watcher import Watcher
-  from auction_tracker.transport.router import TransportRouter
+  from auction_tracker.orchestrator.worker import Pipeline
 
   metrics = MetricsCollector(app.database)
   metrics.pipeline_started()
@@ -576,121 +591,42 @@ async def _run_pipeline_async(
   live = LiveStatus(status_path)
   live.start()
 
-  # Discovery and watcher use separate transport routers so their
-  # per-domain rate limiters are fully independent. Without this, a
-  # discovery fetch burst to eBay would delay the watcher's urgent
-  # eBay checks by the same rate-limit window.
-  async with (
-    TransportRouter(app.config) as discovery_router,
-    TransportRouter(app.config) as watcher_router,
-  ):
-    discovery = DiscoveryLoop(
-      app.config, discovery_router, app.repository,
-      metrics=metrics, live=live,
-    )
-    watcher = Watcher(
-      app.config, app.database, watcher_router, app.repository,
-      metrics=metrics, live=live,
-    )
+  pipeline = Pipeline(
+    config=app.config,
+    database=app.database,
+    repository=app.repository,
+    search_interval=discover_interval * 60.0,
+    classify=classify,
+    website_filter=website,
+    metrics=metrics,
+    live=live,
+  )
 
-    # --- Helpers shared by once and continuous modes ---
-
-    async def run_searches() -> None:
-      """Run all saved searches and ingest result stubs into the DB."""
-      console.print("\n[bold cyan]Discovery: searching for new listings...[/bold cyan]")
-      with app.database.session() as session:
-        stats, _ = await discovery.run_all(session, website_filter=website)
-        console.print(
-          f"  Searches: {stats.searches_run} run, "
-          f"{stats.results_found} found, "
-          f"{stats.new_listings} new"
-        )
-
-    async def fetch_one_batch() -> int:
-      """Fetch one batch of unfetched listings; return the count fetched."""
-      with app.database.session() as session:
-        stats = await discovery.fetch_unfetched(
-          session,
-          website_filter=website,
-          classify=classify,
-          max_per_cycle=max_fetch_per_cycle,
-        )
-      if stats.listings_fetched:
-        console.print(
-          f"  Fetched: {stats.listings_fetched}, "
-          f"classified: {stats.listings_classified}, "
-          f"rejected: {stats.listings_rejected}"
-        )
-      # Reload watcher queue so freshly fetched listings enter monitoring.
-      with app.database.session() as session:
-        count = watcher.load_active_listings(session)
-        if stats.listings_fetched:
-          console.print(f"  Watch queue: {count} active listings")
-      return stats.listings_fetched
-
-    # --- once mode: sequential single pass ---
+  try:
     if once:
-      await run_searches()
-      await fetch_one_batch()
-      watch_stats = await watcher.run_once()
+      console.print("\n[bold cyan]Running single pass (per-website parallel)...[/bold cyan]")
+      all_stats = await pipeline.run_once()
+      for name, worker_stats in all_stats.items():
+        console.print(
+          f"  [{name}] searched: {worker_stats.searches_run}, "
+          f"fetched: {worker_stats.listings_fetched}, "
+          f"watched: {worker_stats.watch_checks}, "
+          f"errors: {worker_stats.errors}"
+        )
+    else:
       console.print(
-        f"\n[bold cyan]Watch:[/bold cyan] "
-        f"{watch_stats.checks_performed} checked, "
-        f"{watch_stats.listings_updated} updated, "
-        f"{watch_stats.listings_completed} completed"
+        f"\n[bold cyan]Per-website pipeline: "
+        f"search every {discover_interval} min, "
+        f"{'with' if classify else 'without'} classification "
+        f"(Ctrl+C to stop)...[/bold cyan]"
       )
-      return
-
-    # --- Continuous mode: three independent concurrent loops ---
-    #
-    # search_loop  — runs saved searches every --discover-interval minutes.
-    # fetch_loop   — continuously drains the unfetched queue in batches;
-    #                immediately loops again if there was more work so the
-    #                backlog cannot accumulate indefinitely.
-    # watcher      — monitors active listings on its own router/rate-limiter.
-    stop_event = asyncio.Event()
-
-    async def search_loop() -> None:
-      while not stop_event.is_set():
-        try:
-          await run_searches()
-        except Exception as exc:
-          logger.error("Search loop error: %s", exc, exc_info=True)
-        live.search_sleeping(discover_interval * 60)
-        with contextlib.suppress(TimeoutError):
-          await asyncio.wait_for(stop_event.wait(), timeout=discover_interval * 60)
-
-    async def fetch_loop() -> None:
-      while not stop_event.is_set():
-        try:
-          fetched = await fetch_one_batch()
-        except Exception as exc:
-          logger.error("Fetch loop error: %s", exc, exc_info=True)
-          fetched = 0
-        if fetched == 0:
-          live.fetch_sleeping()
-          with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(stop_event.wait(), timeout=60.0)
-
-    console.print(
-      f"\n[bold cyan]Continuous mode: "
-      f"searching every {discover_interval} min, fetching continuously, "
-      f"watching listings (Ctrl+C to stop)...[/bold cyan]"
-    )
-
-    search_task = asyncio.create_task(search_loop())
-    fetch_task = asyncio.create_task(fetch_loop())
-    try:
-      await watcher.run_forever(stop_event)
-    except KeyboardInterrupt:
-      pass
-    finally:
-      stop_event.set()
-      with contextlib.suppress(Exception):
-        await asyncio.gather(search_task, fetch_task, return_exceptions=True)
-      live.stop()
-      metrics.pipeline_stopped()
-      console.print("\n[yellow]Pipeline stopped.[/yellow]")
+      await pipeline.run()
+  except KeyboardInterrupt:
+    pass
+  finally:
+    live.stop()
+    metrics.pipeline_stopped()
+    console.print("\n[yellow]Pipeline stopped.[/yellow]")
 
 
 # -------------------------------------------------------------------
