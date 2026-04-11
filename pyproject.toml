@@ -19,11 +19,12 @@ dependencies = [
   "rich>=13.0",
   "pyyaml>=6.0",
   "selectolax>=0.3",
+  "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]
 browser = [
-  "playwright>=1.40",
+  "rebrowser-playwright>=1.49",
   "playwright-stealth>=2.0",
   "camoufox[geoip]>=0.4",
 ]
