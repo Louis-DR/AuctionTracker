@@ -986,8 +986,20 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
   # Routes — Operations dashboard
   # ------------------------------------------------------------------
 
+  _HOURS_TO_LABEL: dict[int, str] = {
+    1: "1h", 6: "6h", 12: "12h", 24: "1d", 48: "2d",
+    168: "1w", 720: "1m", 4320: "6m", 8760: "1y",
+  }
+
+  def _hours_to_label(hours: int) -> str:
+    return _HOURS_TO_LABEL.get(hours, f"{hours}h")
+
   def _make_bucket_fn(granularity: str):
-    """Return (bucket_fn, step) for the given granularity string."""
+    """Return (bucket_fn, step) for the given granularity string.
+
+    For the ``1mo`` granularity the step is ``None``; callers must use
+    ``_iter_time_labels`` which advances the cursor month-by-month.
+    """
     if granularity == "10m":
       def bucket_fn(dt: datetime) -> str:
         return dt.replace(
@@ -1012,10 +1024,54 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         )
         return monday.strftime("%Y-%m-%d")
       return bucket_fn, timedelta(weeks=1)
+    if granularity == "1mo":
+      def bucket_fn(dt: datetime) -> str:
+        return dt.strftime("%Y-%m")
+      return bucket_fn, None
     # Default: 1h
     def bucket_fn(dt: datetime) -> str:
       return dt.strftime("%Y-%m-%d %H:00")
     return bucket_fn, timedelta(hours=1)
+
+  def _iter_time_labels(
+    granularity: str,
+    bucket_fn,
+    bucket_step: timedelta | None,
+    since: datetime,
+    now: datetime,
+  ) -> list[str]:
+    """Generate the ordered list of bucket label strings for the range."""
+    labels: list[str] = []
+    if granularity == "10m":
+      cursor = since.replace(
+        minute=(since.minute // 10) * 10, second=0, microsecond=0,
+      )
+    elif granularity == "6h":
+      cursor = since.replace(
+        hour=(since.hour // 6) * 6, minute=0, second=0, microsecond=0,
+      )
+    elif granularity == "1d":
+      cursor = since.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif granularity == "1w":
+      day_start = since.replace(hour=0, minute=0, second=0, microsecond=0)
+      cursor = day_start - timedelta(days=since.weekday())
+    elif granularity == "1mo":
+      cursor = since.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+      while cursor <= now:
+        labels.append(bucket_fn(cursor))
+        cursor = (
+          cursor.replace(year=cursor.year + 1, month=1)
+          if cursor.month == 12
+          else cursor.replace(month=cursor.month + 1)
+        )
+      return labels
+    else:
+      # Default 1h
+      cursor = since.replace(minute=0, second=0, microsecond=0)
+    while cursor <= now:
+      labels.append(bucket_fn(cursor))
+      cursor += bucket_step  # type: ignore[operator]
+    return labels
 
   def _collect_operations_data(
     hours_back: int,
@@ -1176,8 +1232,10 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       # Idle / active accumulators per website per bucket.
       idle_by_website: dict[str, dict[str, float]] = {}
       active_by_website: dict[str, dict[str, float]] = {}
-      # Per-bucket average fetch/watch queue depth from worker_utilization samples.
-      queue_depth_accum: dict[str, dict[str, dict[str, float | int]]] = {}
+      # Per-bucket last (most recent) fetch/watch/search queue depth.
+      # events_in_window is ordered DESC so the first event seen for any
+      # (website, bucket) is the chronologically latest one.
+      queue_depth_accum: dict[str, dict[str, dict[str, int | None]]] = {}
       # Late watch checks per website per bucket.
       late_watch_threshold = config.scheduler.late_watch_threshold
       late_watch_by_website: dict[str, dict[str, int]] = {}
@@ -1230,18 +1288,17 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
               queue_depth_accum[website] = {}
             if bucket not in queue_depth_accum[website]:
               queue_depth_accum[website][bucket] = {
-                "sf": 0, "nf": 0, "sw": 0, "nw": 0, "ss": 0, "ns": 0,
+                "lf": None, "lw": None, "ls": None,
               }
             accum = queue_depth_accum[website][bucket]
-            if "fetch_queue" in detail:
-              accum["sf"] += int(detail["fetch_queue"])
-              accum["nf"] += 1
-            if "watch_queue" in detail:
-              accum["sw"] += int(detail["watch_queue"])
-              accum["nw"] += 1
-            if "search_queue" in detail:
-              accum["ss"] += int(detail["search_queue"])
-              accum["ns"] += 1
+            # First-write-wins: since events are newest-first, the first
+            # value recorded is the chronologically last one in the bucket.
+            if "fetch_queue" in detail and accum["lf"] is None:
+              accum["lf"] = int(detail["fetch_queue"])
+            if "watch_queue" in detail and accum["lw"] is None:
+              accum["lw"] = int(detail["watch_queue"])
+            if "search_queue" in detail and accum["ls"] is None:
+              accum["ls"] = int(detail["search_queue"])
         if event.event_type == "error":
           hourly_errors[bucket] = hourly_errors.get(bucket, 0) + 1
           website = event.website_name or "unknown"
@@ -1285,25 +1342,9 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         bucket = bucket_fn(end_time)
         hourly_unsold[bucket] = hourly_unsold.get(bucket, 0) + 1
 
-      time_labels = []
-      if granularity == "10m":
-        cursor = since.replace(
-          minute=(since.minute // 10) * 10, second=0, microsecond=0,
-        )
-      elif granularity == "6h":
-        cursor = since.replace(
-          hour=(since.hour // 6) * 6, minute=0, second=0, microsecond=0,
-        )
-      elif granularity == "1d":
-        cursor = since.replace(hour=0, minute=0, second=0, microsecond=0)
-      elif granularity == "1w":
-        day_start = since.replace(hour=0, minute=0, second=0, microsecond=0)
-        cursor = day_start - timedelta(days=since.weekday())
-      else:
-        cursor = since.replace(minute=0, second=0, microsecond=0)
-      while cursor <= now:
-        time_labels.append(bucket_fn(cursor))
-        cursor += bucket_step
+      time_labels = _iter_time_labels(
+        granularity, bucket_fn, bucket_step, since, now,
+      )
 
       def _ts(hourly: dict[str, int]) -> list[int]:
         return [hourly.get(label, 0) for label in time_labels]
@@ -1327,9 +1368,9 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           buckets.get(label, 0) for label in time_labels
         ]
 
-      fetch_queue_by_website: dict[str, list[float | None]] = {}
-      watch_queue_by_website: dict[str, list[float | None]] = {}
-      search_queue_by_website: dict[str, list[float | None]] = {}
+      fetch_queue_by_website: dict[str, list[int | None]] = {}
+      watch_queue_by_website: dict[str, list[int | None]] = {}
+      search_queue_by_website: dict[str, list[int | None]] = {}
       for website in sorted(queue_depth_accum):
         fetch_queue_by_website[website] = []
         watch_queue_by_website[website] = []
@@ -1337,15 +1378,9 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         for label in time_labels:
           cell = queue_depth_accum[website].get(label)
           if cell:
-            fetch_queue_by_website[website].append(
-              round(cell["sf"] / cell["nf"], 1) if cell["nf"] else None,
-            )
-            watch_queue_by_website[website].append(
-              round(cell["sw"] / cell["nw"], 1) if cell["nw"] else None,
-            )
-            search_queue_by_website[website].append(
-              round(cell["ss"] / cell["ns"], 1) if cell["ns"] else None,
-            )
+            fetch_queue_by_website[website].append(cell["lf"])
+            watch_queue_by_website[website].append(cell["lw"])
+            search_queue_by_website[website].append(cell["ls"])
           else:
             fetch_queue_by_website[website].append(None)
             watch_queue_by_website[website].append(None)
@@ -1668,12 +1703,13 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
   def operations():
     hours_back = request.args.get("hours", 24, type=int)
     granularity = request.args.get("granularity", "1h", type=str)
-    if granularity not in ("10m", "1h", "6h", "1d", "1w"):
+    if granularity not in ("10m", "1h", "6h", "1d", "1w", "1mo"):
       granularity = "1h"
     data = _collect_operations_data(hours_back, granularity)
     return render_template(
       "operations.html",
       hours_back=hours_back,
+      range_label=_hours_to_label(hours_back),
       granularity=granularity,
       late_watch_threshold=config.scheduler.late_watch_threshold,
       **data,
@@ -1684,7 +1720,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
     """Return all operations dashboard data as JSON for live polling."""
     hours_back = request.args.get("hours", 24, type=int)
     granularity = request.args.get("granularity", "1h", type=str)
-    if granularity not in ("10m", "1h", "6h", "1d", "1w"):
+    if granularity not in ("10m", "1h", "6h", "1d", "1w", "1mo"):
       granularity = "1h"
     return json.dumps(
       _collect_operations_data(hours_back, granularity),

@@ -306,16 +306,17 @@
 </section>
 
 <!-- Time range & granularity filter -->
+{% set _range_labels = {1:"1h",6:"6h",12:"12h",24:"1d",48:"2d",168:"1w",720:"1m",4320:"6m",8760:"1y"} %}
 <div class="time-filter">
   <span style="align-self: center; font-size: 0.85em; opacity: 0.7;">Time range:</span>
-  {% for hours_option in [1, 6, 12, 24, 48, 168] %}
+  {% for hours_option in [1, 6, 12, 24, 48, 168, 720, 4320, 8760] %}
   <a href="/operations?hours={{ hours_option }}&granularity={{ granularity }}"
      {% if hours_back == hours_option %}class="active"{% endif %}>
-    {% if hours_option < 24 %}{{ hours_option }}h{% elif hours_option == 24 %}1d{% elif hours_option == 48 %}2d{% else %}7d{% endif %}
+    {{ _range_labels[hours_option] }}
   </a>
   {% endfor %}
   <span style="align-self: center; font-size: 0.85em; opacity: 0.7; margin-left: 1rem;">Granularity:</span>
-  {% for gran_option in ["10m", "1h", "6h", "1d", "1w"] %}
+  {% for gran_option in ["10m", "1h", "6h", "1d", "1w", "1mo"] %}
   <a href="/operations?hours={{ hours_back }}&granularity={{ gran_option }}"
      {% if granularity == gran_option %}class="active"{% endif %}>
     {{ gran_option }}
@@ -349,7 +350,7 @@
     <small class="muted">Unfetched listings in DB</small>
   </article>
   <article class="metric-card">
-    <p class="stat-label">Errors (<span id="ops-hours-label">{{ hours_back }}</span>h)</p>
+    <p class="stat-label">Errors (<span id="ops-hours-label">{{ range_label }}</span>)</p>
     <p class="stat-number" id="ops-error-count"
        {% if error_count > 0 %}style="color: #ff4136;"{% endif %}>
       {{ error_count }}
@@ -384,7 +385,7 @@
         </tbody>
       </table>
       {% else %}
-      <p class="muted" id="ops-search-empty">No search events in the last {{ hours_back }}h.</p>
+      <p class="muted" id="ops-search-empty">No search events in the last {{ range_label }}.</p>
       {% endif %}
     </div>
   </article>
@@ -418,7 +419,7 @@
 
   <!-- Activity & Requests group -->
   <div class="chart-grid-item chart-tab-group" id="group-activity">
-    <h2>Activity &amp; Requests (<span class="ops-hours-label-text">{{ hours_back }}</span>h)</h2>
+    <h2>Activity &amp; Requests (<span class="ops-hours-label-text">{{ range_label }}</span>)</h2>
     <div class="chart-tab-nav" data-group="activity">
       <button class="active" data-panel="activity-time">Over Time</button>
       <button data-panel="activity-website">Per Website</button>
@@ -449,7 +450,7 @@
 
   <!-- Errors group -->
   <div class="chart-grid-item chart-tab-group" id="group-errors">
-    <h2>Errors (<span class="ops-hours-label-text">{{ hours_back }}</span>h)</h2>
+    <h2>Errors (<span class="ops-hours-label-text">{{ range_label }}</span>)</h2>
     <div class="chart-tab-nav" data-group="errors">
       <button class="active" data-panel="errors-time">Over Time</button>
       <button data-panel="errors-website">By Website</button>
@@ -474,7 +475,7 @@
 
   <!-- Scraper load: worker utilization, queues, late watch checks -->
   <div class="chart-grid-item chart-tab-group" id="group-scraper-load">
-    <h2>Scraper load (<span class="ops-hours-label-text">{{ hours_back }}</span>h)</h2>
+    <h2>Scraper load (<span class="ops-hours-label-text">{{ range_label }}</span>)</h2>
     <div class="chart-tab-nav" data-group="scraper-load">
       <button class="active" data-panel="scraper-load-chart">Load</button>
       <button data-panel="scraper-fetch-queue">Fetch queue</button>
@@ -672,6 +673,7 @@
 // Constants & helpers
 // ---------------------------------------------------------------
 const HOURS_BACK = {{ hours_back }};
+const RANGE_LABEL = '{{ range_label }}';
 const GRANULARITY = '{{ granularity }}';
 const LATE_WATCH_THRESHOLD = {{ late_watch_threshold }};
 
@@ -777,9 +779,11 @@ const initialWebsiteData = {{ website_request_counts|tojson_safe }};
 const initialReqTypeData = {{ request_type_counts|tojson_safe }};
 const initialTimeseries = {{ timeseries_data|tojson_safe }};
 function shortLabel(label) {
-  // "1d" labels are "YYYY-MM-DD" → show "MM-DD"
+  // "1mo" labels are "YYYY-MM" → show as-is
+  if (GRANULARITY === '1mo') return label;
+  // "1d" / "1w" labels are "YYYY-MM-DD" → show "MM-DD"
   if (GRANULARITY === '1d' || GRANULARITY === '1w') return label.slice(5);
-  // "10m" / "1h" labels are "YYYY-MM-DD HH:MM" → show "HH:MM"
+  // "10m" / "1h" / "6h" labels are "YYYY-MM-DD HH:MM" → show "HH:MM"
   const parts = label.split(' ');
   return parts.length > 1 ? parts[1] : label;
 }
@@ -1607,7 +1611,7 @@ function renderSearchTable(searchStats) {
   if (!wrap) return;
   const entries = Object.entries(searchStats || {});
   if (entries.length === 0) {
-    wrap.innerHTML = `<p class="muted">No search events in the last ${HOURS_BACK}h.</p>`;
+    wrap.innerHTML = `<p class="muted">No search events in the last ${RANGE_LABEL}.</p>`;
     return;
   }
   entries.sort((a, b) => a[0].localeCompare(b[0]));
