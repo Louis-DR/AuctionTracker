@@ -70,6 +70,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
 
   images_directory = str(config.classifier.images_directory)
   display_tz = ZoneInfo(config.display_timezone)
+  display_currency = config.display_currency
 
   app = Flask(
     __name__,
@@ -79,6 +80,10 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
   app.config["MANUAL_CANCEL_FILE"] = str(
     config.database.path.parent / "manual_cancel_listings.txt",
   )
+
+  @app.context_processor
+  def inject_display_currency():
+    return {"display_currency": display_currency}
 
   # ------------------------------------------------------------------
   # Template filters
@@ -179,8 +184,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
          .where(Listing.final_price.isnot(None))
       ).one()
 
-      rejected_count = status_counts.get(ListingStatus.CANCELLED, 0)
-
       recent_listings = session.execute(
         select(Listing)
         .options(joinedload(Listing.website))
@@ -196,7 +199,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         total_sellers=total_sellers,
         total_websites=total_websites,
         total_images=total_images,
-        rejected_count=rejected_count,
         price_avg=price_stats[0],
         price_min=price_stats[1],
         price_max=price_stats[2],
@@ -357,6 +359,11 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         ListingStatus=ListingStatus,
         ListingType=ListingType,
         price_history_data=price_history_data,
+        chart_defaults={
+          "time_start": config.display.chart_time_start,
+          "price_min": config.display.chart_price_min,
+          "price_max": config.display.chart_price_max,
+        },
       )
 
   # ------------------------------------------------------------------
@@ -382,7 +389,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       if listing is None:
         abort(404)
 
-      is_non_eur = listing.currency != "EUR"
+      is_non_eur = listing.currency != display_currency
       bid_chart_data = []
       for bid in listing.bids:
         display_time = bid.bid_time
@@ -894,12 +901,48 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
   # Routes — Operations dashboard
   # ------------------------------------------------------------------
 
-  def _collect_operations_data(hours_back: int) -> dict:
+  def _make_bucket_fn(granularity: str):
+    """Return (bucket_fn, step) for the given granularity string."""
+    if granularity == "10m":
+      def bucket_fn(dt: datetime) -> str:
+        return dt.replace(
+          minute=(dt.minute // 10) * 10, second=0, microsecond=0,
+        ).strftime("%Y-%m-%d %H:%M")
+      return bucket_fn, timedelta(minutes=10)
+    if granularity == "6h":
+      def bucket_fn(dt: datetime) -> str:
+        return dt.replace(
+          hour=(dt.hour // 6) * 6, minute=0, second=0, microsecond=0,
+        ).strftime("%Y-%m-%d %H:00")
+      return bucket_fn, timedelta(hours=6)
+    if granularity == "1d":
+      def bucket_fn(dt: datetime) -> str:
+        return dt.strftime("%Y-%m-%d")
+      return bucket_fn, timedelta(days=1)
+    if granularity == "1w":
+      def bucket_fn(dt: datetime) -> str:
+        # Monday of the ISO week that contains dt.
+        monday = dt.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(
+          days=dt.weekday()
+        )
+        return monday.strftime("%Y-%m-%d")
+      return bucket_fn, timedelta(weeks=1)
+    # Default: 1h
+    def bucket_fn(dt: datetime) -> str:
+      return dt.strftime("%Y-%m-%d %H:00")
+    return bucket_fn, timedelta(hours=1)
+
+  def _collect_operations_data(
+    hours_back: int,
+    granularity: str = "1h",
+  ) -> dict:
     """Query the database and return all data needed for the operations page.
 
     Extracted into a helper so the HTML route and the JSON API route
     can share the same logic without duplication.
     """
+    bucket_fn, bucket_step = _make_bucket_fn(granularity)
+
     now = datetime.now(UTC)
     since = now - timedelta(hours=hours_back)
     since_naive = since.replace(tzinfo=None)
@@ -1045,8 +1088,17 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       # {source: {bucket: count}} for stacked error-by-source bar.
       hourly_errors_by_source: dict[str, dict[str, int]] = {}
 
+      # Idle / active accumulators per website per bucket.
+      idle_by_website: dict[str, dict[str, float]] = {}
+      active_by_website: dict[str, dict[str, float]] = {}
+      # Per-bucket average fetch/watch queue depth from worker_utilization samples.
+      queue_depth_accum: dict[str, dict[str, dict[str, float | int]]] = {}
+      # Late watch checks per website per bucket.
+      late_watch_threshold = config.scheduler.late_watch_threshold
+      late_watch_by_website: dict[str, dict[str, int]] = {}
+
       for event in events_in_window:
-        bucket = event.timestamp.strftime("%Y-%m-%d %H:00")
+        bucket = bucket_fn(event.timestamp)
         if event.event_type == "search_run":
           detail = json.loads(event.detail_json) if event.detail_json else {}
           hourly_new_listings[bucket] = (
@@ -1060,6 +1112,51 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           hourly_updated[bucket] = (
             hourly_updated.get(bucket, 0) + detail.get("updated", 0)
           )
+        if event.event_type == "watch_check":
+          detail = json.loads(event.detail_json) if event.detail_json else {}
+          delay = detail.get("delay_seconds", 0.0)
+          if delay >= late_watch_threshold and event.website_name:
+            website = event.website_name
+            if website not in late_watch_by_website:
+              late_watch_by_website[website] = {}
+            late_watch_by_website[website][bucket] = (
+              late_watch_by_website[website].get(bucket, 0) + 1
+            )
+        if event.event_type == "worker_utilization" and event.website_name:
+          detail = json.loads(event.detail_json) if event.detail_json else {}
+          website = event.website_name
+          if website not in idle_by_website:
+            idle_by_website[website] = {}
+            active_by_website[website] = {}
+          idle_by_website[website][bucket] = (
+            idle_by_website[website].get(bucket, 0.0)
+            + detail.get("idle_seconds", 0.0)
+          )
+          active_by_website[website][bucket] = (
+            active_by_website[website].get(bucket, 0.0)
+            + detail.get("active_seconds", 0.0)
+          )
+          if (
+            "fetch_queue" in detail
+            or "watch_queue" in detail
+            or "search_queue" in detail
+          ):
+            if website not in queue_depth_accum:
+              queue_depth_accum[website] = {}
+            if bucket not in queue_depth_accum[website]:
+              queue_depth_accum[website][bucket] = {
+                "sf": 0, "nf": 0, "sw": 0, "nw": 0, "ss": 0, "ns": 0,
+              }
+            accum = queue_depth_accum[website][bucket]
+            if "fetch_queue" in detail:
+              accum["sf"] += int(detail["fetch_queue"])
+              accum["nf"] += 1
+            if "watch_queue" in detail:
+              accum["sw"] += int(detail["watch_queue"])
+              accum["nw"] += 1
+            if "search_queue" in detail:
+              accum["ss"] += int(detail["search_queue"])
+              accum["ns"] += 1
         if event.event_type == "error":
           hourly_errors[bucket] = hourly_errors.get(bucket, 0) + 1
           website = event.website_name or "unknown"
@@ -1082,7 +1179,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
             hourly_requests_by_type[type_label].get(bucket, 0) + 1
           )
 
-      # Sold / unsold per hour from the Listing table end_time.
       hourly_sold: dict[str, int] = {}
       hourly_unsold: dict[str, int] = {}
       for (end_time,) in session.execute(
@@ -1092,7 +1188,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         .where(Listing.end_time >= since_naive)
         .where(Listing.end_time <= now_naive)
       ).all():
-        bucket = end_time.strftime("%Y-%m-%d %H:00")
+        bucket = bucket_fn(end_time)
         hourly_sold[bucket] = hourly_sold.get(bucket, 0) + 1
       for (end_time,) in session.execute(
         select(Listing.end_time)
@@ -1101,17 +1197,74 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         .where(Listing.end_time >= since_naive)
         .where(Listing.end_time <= now_naive)
       ).all():
-        bucket = end_time.strftime("%Y-%m-%d %H:00")
+        bucket = bucket_fn(end_time)
         hourly_unsold[bucket] = hourly_unsold.get(bucket, 0) + 1
 
       time_labels = []
-      cursor = since.replace(minute=0, second=0, microsecond=0)
+      if granularity == "10m":
+        cursor = since.replace(
+          minute=(since.minute // 10) * 10, second=0, microsecond=0,
+        )
+      elif granularity == "6h":
+        cursor = since.replace(
+          hour=(since.hour // 6) * 6, minute=0, second=0, microsecond=0,
+        )
+      elif granularity == "1d":
+        cursor = since.replace(hour=0, minute=0, second=0, microsecond=0)
+      elif granularity == "1w":
+        day_start = since.replace(hour=0, minute=0, second=0, microsecond=0)
+        cursor = day_start - timedelta(days=since.weekday())
+      else:
+        cursor = since.replace(minute=0, second=0, microsecond=0)
       while cursor <= now:
-        time_labels.append(cursor.strftime("%Y-%m-%d %H:00"))
-        cursor += timedelta(hours=1)
+        time_labels.append(bucket_fn(cursor))
+        cursor += bucket_step
 
       def _ts(hourly: dict[str, int]) -> list[int]:
         return [hourly.get(label, 0) for label in time_labels]
+
+      # Load % per website: active / (idle + active) * 100 per bucket (complement of idle %).
+      load_pct_by_website: dict[str, list[float | None]] = {}
+      for website in idle_by_website:
+        load_pct_by_website[website] = []
+        for label in time_labels:
+          idle = idle_by_website[website].get(label, 0.0)
+          active = active_by_website.get(website, {}).get(label, 0.0)
+          total = idle + active
+          load_pct_by_website[website].append(
+            round(100.0 * active / total, 1) if total > 0 else None
+          )
+
+      # Late watch counts per website per bucket.
+      late_watch_ts: dict[str, list[int]] = {}
+      for website, buckets in late_watch_by_website.items():
+        late_watch_ts[website] = [
+          buckets.get(label, 0) for label in time_labels
+        ]
+
+      fetch_queue_by_website: dict[str, list[float | None]] = {}
+      watch_queue_by_website: dict[str, list[float | None]] = {}
+      search_queue_by_website: dict[str, list[float | None]] = {}
+      for website in sorted(queue_depth_accum):
+        fetch_queue_by_website[website] = []
+        watch_queue_by_website[website] = []
+        search_queue_by_website[website] = []
+        for label in time_labels:
+          cell = queue_depth_accum[website].get(label)
+          if cell:
+            fetch_queue_by_website[website].append(
+              round(cell["sf"] / cell["nf"], 1) if cell["nf"] else None,
+            )
+            watch_queue_by_website[website].append(
+              round(cell["sw"] / cell["nw"], 1) if cell["nw"] else None,
+            )
+            search_queue_by_website[website].append(
+              round(cell["ss"] / cell["ns"], 1) if cell["ns"] else None,
+            )
+          else:
+            fetch_queue_by_website[website].append(None)
+            watch_queue_by_website[website].append(None)
+            search_queue_by_website[website].append(None)
 
       timeseries_data = {
         "labels": time_labels,
@@ -1139,6 +1292,11 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           if hourly_requests.get(label, 0) > 0 else 0
           for label in time_labels
         ],
+        "load_pct_by_website": load_pct_by_website,
+        "late_watch_by_website": late_watch_ts,
+        "fetch_queue_by_website": fetch_queue_by_website,
+        "watch_queue_by_website": watch_queue_by_website,
+        "search_queue_by_website": search_queue_by_website,
       }
 
       recent_errors = []
@@ -1150,6 +1308,241 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           "source": detail.get("source", ""),
           "message": detail.get("message", ""),
         })
+
+      # ---- Search-query charts (not time-windowed) ----
+
+      source_prefix = "source_search:"
+
+      # Listings per search query, broken down by status.
+      search_source_rows = session.execute(
+        select(
+          ListingAttribute.attribute_name,
+          Listing.status,
+          func.count(Listing.id).label("cnt"),
+        )
+        .join(Listing, Listing.id == ListingAttribute.listing_id)
+        .where(ListingAttribute.attribute_name.like(f"{source_prefix}%"))
+        .group_by(ListingAttribute.attribute_name, Listing.status)
+      ).all()
+
+      search_listing_data: dict[str, dict[str, int]] = {}
+      for row in search_source_rows:
+        query_text = row.attribute_name[len(source_prefix):]
+        if query_text not in search_listing_data:
+          search_listing_data[query_text] = {}
+        status_label = row.status.value if row.status else "unknown"
+        search_listing_data[query_text][status_label] = (
+          search_listing_data[query_text].get(status_label, 0) + row.cnt
+        )
+
+      # Sort by total listings descending.
+      sorted_query_keys = sorted(
+        search_listing_data,
+        key=lambda query: sum(search_listing_data[query].values()),
+        reverse=True,
+      )
+      status_bar_data = [
+        {
+          "query": query,
+          "active": search_listing_data[query].get("active", 0),
+          "sold": search_listing_data[query].get("sold", 0),
+          "unsold": search_listing_data[query].get("unsold", 0),
+        }
+        for query in sorted_query_keys
+      ]
+
+      # Rejection rate per search query.
+      verified_counts = dict(session.execute(
+        select(
+          ListingAttribute.attribute_name,
+          func.count(func.distinct(Listing.id)),
+        )
+        .join(Listing, Listing.id == ListingAttribute.listing_id)
+        .where(ListingAttribute.attribute_name.like(f"{source_prefix}%"))
+        .where(
+          Listing.id.in_(
+            select(ListingAttribute.listing_id).where(
+              ListingAttribute.attribute_name.like("classifier_%")
+            )
+          )
+        )
+        .group_by(ListingAttribute.attribute_name)
+      ).all())
+
+      rejected_counts = dict(session.execute(
+        select(
+          ListingAttribute.attribute_name,
+          func.count(func.distinct(Listing.id)),
+        )
+        .join(Listing, Listing.id == ListingAttribute.listing_id)
+        .where(ListingAttribute.attribute_name.like(f"{source_prefix}%"))
+        .where(Listing.status == ListingStatus.CANCELLED)
+        .where(
+          Listing.id.in_(
+            select(ListingAttribute.listing_id).where(
+              ListingAttribute.attribute_name.like("classifier_%")
+            )
+          )
+        )
+        .group_by(ListingAttribute.attribute_name)
+      ).all())
+
+      rejection_rate_data = []
+      for query in sorted_query_keys:
+        attr_name = f"{source_prefix}{query}"
+        verified = verified_counts.get(attr_name, 0)
+        rejected = rejected_counts.get(attr_name, 0)
+        rate = round(100.0 * rejected / verified, 1) if verified else 0.0
+        rejection_rate_data.append({
+          "query": query,
+          "rate": rate,
+          "rejected": rejected,
+          "verified": verified,
+        })
+
+      # New listings per search query over time (all-time, daily).
+      all_search_events = session.execute(
+        select(PipelineEvent)
+        .where(PipelineEvent.event_type == "search_run")
+        .order_by(PipelineEvent.timestamp)
+      ).scalars().all()
+
+      daily_new_by_query: dict[str, dict[str, int]] = {}
+      for event in all_search_events:
+        detail = json.loads(event.detail_json) if event.detail_json else {}
+        query_text = detail.get("query", "")
+        new_count = detail.get("new_listings", 0)
+        if not query_text or new_count == 0:
+          continue
+        day = event.timestamp.strftime("%Y-%m-%d")
+        if query_text not in daily_new_by_query:
+          daily_new_by_query[query_text] = {}
+        daily_new_by_query[query_text][day] = (
+          daily_new_by_query[query_text].get(day, 0) + new_count
+        )
+
+      query_totals = {
+        query: sum(days.values())
+        for query, days in daily_new_by_query.items()
+      }
+      top_queries = sorted(
+        query_totals, key=query_totals.get, reverse=True,
+      )[:10]
+      all_days = sorted({
+        day
+        for days in daily_new_by_query.values()
+        for day in days
+      })
+      new_listings_timeseries = {
+        "labels": all_days,
+        "datasets": {
+          query: [
+            daily_new_by_query.get(query, {}).get(day, 0)
+            for day in all_days
+          ]
+          for query in top_queries
+        },
+      }
+
+      # ---- Classification charts (not time-windowed) ----
+
+      classifier_rows = session.execute(
+        select(
+          ListingAttribute.listing_id,
+          ListingAttribute.attribute_name,
+          ListingAttribute.attribute_value,
+        )
+        .where(ListingAttribute.attribute_name.in_([
+          "classifier_score",
+          "classifier_accepted",
+          "classifier_top_class",
+        ]))
+      ).all()
+
+      classifier_by_listing: dict[int, dict[str, str]] = {}
+      for listing_id, attr_name, attr_value in classifier_rows:
+        if listing_id not in classifier_by_listing:
+          classifier_by_listing[listing_id] = {}
+        classifier_by_listing[listing_id][attr_name] = attr_value
+
+      accepted_scores: list[float] = []
+      rejected_scores: list[float] = []
+      top_class_counts: dict[str, int] = {}
+      for _listing_id, attrs in classifier_by_listing.items():
+        score_str = attrs.get("classifier_score")
+        accepted_str = attrs.get("classifier_accepted")
+        if score_str is None:
+          continue
+        score = float(score_str)
+        if accepted_str == "1":
+          accepted_scores.append(score)
+        else:
+          rejected_scores.append(score)
+        top_class = attrs.get("classifier_top_class")
+        if top_class and score >= config.classifier.threshold:
+          top_class_counts[top_class] = (
+            top_class_counts.get(top_class, 0) + 1
+          )
+
+      num_bins = 20
+      score_histogram = {
+        "bin_labels": [
+          f"{index * 5}-{index * 5 + 5}%"
+          for index in range(num_bins)
+        ],
+        "accepted": [0] * num_bins,
+        "rejected": [0] * num_bins,
+      }
+      for score in accepted_scores:
+        bin_index = min(int(score * num_bins), num_bins - 1)
+        score_histogram["accepted"][bin_index] += 1
+      for score in rejected_scores:
+        bin_index = min(int(score * num_bins), num_bins - 1)
+        score_histogram["rejected"][bin_index] += 1
+
+      top_categories = sorted(
+        top_class_counts.items(),
+        key=lambda pair: pair[1],
+        reverse=True,
+      )
+
+      classification_events = session.execute(
+        select(PipelineEvent)
+        .where(PipelineEvent.event_type == "classification")
+        .order_by(PipelineEvent.timestamp)
+      ).scalars().all()
+
+      daily_classification: dict[str, dict[str, int]] = {}
+      for event in classification_events:
+        day = event.timestamp.strftime("%Y-%m-%d")
+        detail = json.loads(event.detail_json) if event.detail_json else {}
+        is_accepted = detail.get("accepted", False)
+        if day not in daily_classification:
+          daily_classification[day] = {
+            "total": 0, "accepted": 0, "rejected": 0,
+          }
+        daily_classification[day]["total"] += 1
+        if is_accepted:
+          daily_classification[day]["accepted"] += 1
+        else:
+          daily_classification[day]["rejected"] += 1
+
+      classification_days = sorted(daily_classification.keys())
+      classification_timeseries = {
+        "labels": classification_days,
+        "total": [
+          daily_classification[day]["total"]
+          for day in classification_days
+        ],
+        "accepted": [
+          daily_classification[day]["accepted"]
+          for day in classification_days
+        ],
+        "rejected": [
+          daily_classification[day]["rejected"]
+          for day in classification_days
+        ],
+      }
 
     return {
       "pipeline_running": pipeline_running,
@@ -1178,15 +1571,26 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       "upcoming_auctions": upcoming_auctions_json,
       "timeseries_data": timeseries_data,
       "recent_errors": recent_errors,
+      "new_listings_timeseries": new_listings_timeseries,
+      "status_bar_data": status_bar_data,
+      "rejection_rate_data": rejection_rate_data,
+      "score_histogram": score_histogram,
+      "top_categories": top_categories,
+      "classification_timeseries": classification_timeseries,
     }
 
   @app.route("/operations")
   def operations():
     hours_back = request.args.get("hours", 24, type=int)
-    data = _collect_operations_data(hours_back)
+    granularity = request.args.get("granularity", "1h", type=str)
+    if granularity not in ("10m", "1h", "6h", "1d", "1w"):
+      granularity = "1h"
+    data = _collect_operations_data(hours_back, granularity)
     return render_template(
       "operations.html",
       hours_back=hours_back,
+      granularity=granularity,
+      late_watch_threshold=config.scheduler.late_watch_threshold,
       **data,
     )
 
@@ -1194,7 +1598,13 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
   def operations_stats():
     """Return all operations dashboard data as JSON for live polling."""
     hours_back = request.args.get("hours", 24, type=int)
-    return json.dumps(_collect_operations_data(hours_back), cls=_DecimalDatetimeEncoder)
+    granularity = request.args.get("granularity", "1h", type=str)
+    if granularity not in ("10m", "1h", "6h", "1d", "1w"):
+      granularity = "1h"
+    return json.dumps(
+      _collect_operations_data(hours_back, granularity),
+      cls=_DecimalDatetimeEncoder,
+    )
 
   # ------------------------------------------------------------------
   # Routes — Live status API
