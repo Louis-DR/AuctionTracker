@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -150,7 +150,7 @@ class Repository:
       for key, value in kwargs.items():
         if value is not None:
           setattr(listing, key, value)
-      listing.last_checked_at = datetime.utcnow()
+      listing.last_checked_at = datetime.now(UTC).replace(tzinfo=None)
     session.flush()
     return listing, is_new
 
@@ -185,7 +185,7 @@ class Repository:
     status: ListingStatus,
     final_price: float | None = None,
   ) -> None:
-    values: dict = {"status": status, "last_checked_at": datetime.utcnow()}
+    values: dict = {"status": status, "last_checked_at": datetime.now(UTC).replace(tzinfo=None)}
     if final_price is not None:
       values["final_price"] = final_price
     session.execute(
@@ -219,12 +219,14 @@ class Repository:
     watcher_count: int | None = None,
     view_count: int | None = None,
     price_eur: float | None = None,
+    exchange_rate: float | None = None,
   ) -> PriceSnapshot:
     snapshot = PriceSnapshot(
       listing_id=listing_id,
       price=price,
       currency=currency,
       price_eur=price_eur,
+      exchange_rate=exchange_rate,
       bid_count=bid_count,
       watcher_count=watcher_count,
       view_count=view_count,

@@ -389,6 +389,8 @@ class PriceSnapshot(Base):
   price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
   currency: Mapped[str] = mapped_column(String(3), nullable=False)
   price_eur: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+  # Units of the source currency per 1 EUR at the time of this snapshot.
+  exchange_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
 
   bid_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
   watcher_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
