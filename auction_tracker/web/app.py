@@ -535,17 +535,59 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
 
   @app.route("/sellers")
   def sellers():
+    from collections import defaultdict
+
     with database.session() as session:
       all_sellers = session.execute(
-        select(Seller)
-        .options(
-          joinedload(Seller.website),
-          joinedload(Seller.listings),
-        )
-        .order_by(Seller.username)
+        select(Seller).options(joinedload(Seller.website))
       ).scalars().unique().all()
 
-      return render_template("sellers.html", sellers=all_sellers)
+      # Aggregate listing stats per seller without loading full ORM objects.
+      listing_rows = session.execute(
+        select(Listing.seller_id, Listing.status, Listing.final_price_eur)
+        .where(Listing.seller_id.isnot(None))
+      ).all()
+
+      stats_by_seller: dict[int, dict] = defaultdict(
+        lambda: {"total": 0, "sold": 0, "active": 0, "volume_eur": 0.0}
+      )
+      for row in listing_rows:
+        entry = stats_by_seller[row.seller_id]
+        entry["total"] += 1
+        if row.status == ListingStatus.SOLD:
+          entry["sold"] += 1
+          if row.final_price_eur is not None:
+            entry["volume_eur"] += float(row.final_price_eur)
+        elif row.status == ListingStatus.ACTIVE:
+          entry["active"] += 1
+
+      all_website_names = sorted({s.website.name for s in all_sellers if s.website})
+      all_countries = sorted({s.country for s in all_sellers if s.country})
+
+      seller_data = [
+        {
+          "id": s.id,
+          "display_name": s.display_name or s.username,
+          "username": s.username,
+          "website": s.website.name if s.website else "",
+          "country": s.country or "",
+          "rating": float(s.rating) if s.rating is not None else None,
+          "feedback_count": s.feedback_count or 0,
+          "listing_count": stats_by_seller[s.id]["total"],
+          "sold_count": stats_by_seller[s.id]["sold"],
+          "active_count": stats_by_seller[s.id]["active"],
+          "volume_eur": round(stats_by_seller[s.id]["volume_eur"], 2),
+        }
+        for s in all_sellers
+      ]
+      seller_data.sort(key=lambda x: x["listing_count"], reverse=True)
+
+      return render_template(
+        "sellers.html",
+        seller_data=seller_data,
+        all_website_names=all_website_names,
+        all_countries=all_countries,
+      )
 
   @app.route("/sellers/<int:seller_id>")
   def seller_detail(seller_id):
@@ -628,7 +670,50 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         .order_by(desc(func.count(func.distinct(BidEvent.listing_id))))
       ).all()
 
-      return render_template("bidders.html", bidder_stats=bidder_stats)
+      # Build per-bidder website list.
+      bidder_website_rows = session.execute(
+        select(BidEvent.bidder_username, Website.name.label("website_name"))
+        .join(Listing, BidEvent.listing_id == Listing.id)
+        .join(Website, Listing.website_id == Website.id)
+        .where(BidEvent.bidder_username.isnot(None))
+        .distinct()
+      ).all()
+
+      websites_by_bidder: dict[str, list[str]] = {}
+      all_website_name_set: set[str] = set()
+      for row in bidder_website_rows:
+        websites_by_bidder.setdefault(row.bidder_username, []).append(row.website_name)
+        all_website_name_set.add(row.website_name)
+
+      all_website_names = sorted(all_website_name_set)
+      all_countries = sorted({
+        row.bidder_country for row in bidder_stats if row.bidder_country
+      })
+
+      bidder_data = [
+        {
+          "username": row.bidder_username,
+          "country": row.bidder_country or "",
+          "websites": sorted(websites_by_bidder.get(row.bidder_username, [])),
+          "listing_count": row.listing_count,
+          "won_count": row.won_count or 0,
+          "win_rate": (
+            round(100.0 * (row.won_count or 0) / row.listing_count, 1)
+            if row.listing_count else 0.0
+          ),
+          "total_spent_eur": (
+            round(float(row.total_spent_eur), 2) if row.total_spent_eur else 0.0
+          ),
+        }
+        for row in bidder_stats
+      ]
+
+      return render_template(
+        "bidders.html",
+        bidder_data=bidder_data,
+        all_website_names=all_website_names,
+        all_countries=all_countries,
+      )
 
   @app.route("/bidders/<username>")
   def bidder_detail(username):

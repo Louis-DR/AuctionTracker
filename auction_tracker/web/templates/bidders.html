@@ -2,45 +2,199 @@
 {% set active_page = "bidders" %}
 {% block title %}Bidders – AuctionTracker{% endblock %}
 
+{% block extra_css %}
+.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.sortable:hover { opacity: 0.75; }
+.sort-none::after { content: " ↕"; font-size: 0.75em; opacity: 0.35; }
+.sort-asc::after  { content: " ▲"; font-size: 0.75em; }
+.sort-desc::after { content: " ▼"; font-size: 0.75em; }
+
+.site-pill {
+  display: inline-block;
+  padding: 0.1em 0.45em;
+  border-radius: 0.25em;
+  font-size: 0.78em;
+  font-weight: 600;
+  background: var(--pico-secondary-background);
+  color: var(--pico-secondary-inverse);
+  margin: 0.1em 0.1em 0.1em 0;
+  white-space: nowrap;
+}
+{% endblock %}
+
 {% block content %}
 <hgroup>
   <h1>Bidders</h1>
-  <p>{{ bidder_stats|length }} unique bidder{{ "s" if bidder_stats|length != 1 else "" }}</p>
+  <p id="result-count" class="muted">
+    {{ bidder_data|length }} bidder{{ "s" if bidder_data|length != 1 else "" }}
+  </p>
 </hgroup>
 
-{% if bidder_stats %}
+{% if bidder_data %}
+<form class="filter-form" id="filter-form" onsubmit="return false;">
+  <div class="filter-group-wide">
+    <label for="search-username">Username</label>
+    <input type="search" id="search-username" placeholder="Search username…">
+  </div>
+  <div class="filter-group">
+    <label for="filter-website">Website</label>
+    <select id="filter-website">
+      <option value="">All websites</option>
+      {% for w in all_website_names %}
+      <option value="{{ w }}">{{ w }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-group">
+    <label for="filter-country">Country</label>
+    <select id="filter-country">
+      <option value="">All countries</option>
+      {% for c in all_countries %}
+      <option value="{{ c }}">{{ c }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</form>
+
 <div style="overflow-x: auto;">
-  <table>
+  <table id="bidders-table">
     <thead>
       <tr>
-        <th>Username</th>
-        <th>Country</th>
-        <th class="text-right">Listings</th>
-        <th class="text-right">Won</th>
-        <th class="text-right">Total Spent (EUR)</th>
+        <th class="sortable sort-none" data-col="username">Username</th>
+        <th class="sortable sort-none" data-col="country">Country</th>
+        <th data-col="websites">Websites</th>
+        <th class="sortable sort-desc text-right" data-col="listing_count">Bids on</th>
+        <th class="sortable sort-none text-right" data-col="won_count">Won</th>
+        <th class="sortable sort-none text-right" data-col="win_rate">Win&nbsp;%</th>
+        <th class="sortable sort-none text-right" data-col="total_spent_eur">Total Spent</th>
       </tr>
     </thead>
-    <tbody>
-      {% for row in bidder_stats %}
-      <tr class="clickable-row"
-          onclick="location.href='/bidders/{{ row.bidder_username|urlencode }}'">
-        <td><strong>{{ row.bidder_username }}</strong></td>
-        <td>{{ row.bidder_country or "–" }}</td>
-        <td class="text-right">{{ row.listing_count }}</td>
-        <td class="text-right">{{ row.won_count or 0 }}</td>
-        <td class="text-right">
-          {% if row.total_spent_eur %}
-            {{ "%.2f"|format(row.total_spent_eur|float) }}&nbsp;EUR
-          {% else %}
-            –
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
+    <tbody id="bidders-tbody"></tbody>
   </table>
 </div>
 {% else %}
 <p class="muted">No bid data yet.</p>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const BIDDER_DATA = {{ bidder_data | tojson_safe }};
+const DISPLAY_CURRENCY = '{{ display_currency }}';
+
+let sortCol = 'listing_count';
+let sortDir = 'desc';
+
+const NUMERIC_COLS = new Set([
+  'listing_count', 'won_count', 'win_rate', 'total_spent_eur',
+]);
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function formatCurrency(value) {
+  if (!value) return '&ndash;';
+  return new Intl.NumberFormat('fr-FR', {
+    style: 'currency',
+    currency: DISPLAY_CURRENCY,
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function render(data) {
+  const tbody = document.getElementById('bidders-tbody');
+  const countEl = document.getElementById('result-count');
+  if (!tbody) return;
+
+  tbody.innerHTML = data.map(row => {
+    const pills = (row.websites || [])
+      .map(w => `<span class="site-pill">${escHtml(w)}</span>`)
+      .join('');
+
+    const winRate = row.won_count > 0
+      ? row.win_rate.toFixed(1) + '&thinsp;%'
+      : '&ndash;';
+
+    return `<tr class="clickable-row"
+        onclick="location.href='/bidders/${encodeURIComponent(row.username)}'">
+      <td><strong>${escHtml(row.username)}</strong></td>
+      <td>${escHtml(row.country) || '&ndash;'}</td>
+      <td>${pills || '&ndash;'}</td>
+      <td class="text-right">${row.listing_count}</td>
+      <td class="text-right">${row.won_count > 0 ? row.won_count : '&ndash;'}</td>
+      <td class="text-right no-wrap">${winRate}</td>
+      <td class="text-right no-wrap">${formatCurrency(row.total_spent_eur)}</td>
+    </tr>`;
+  }).join('');
+
+  if (countEl) {
+    countEl.textContent =
+      data.length + ' bidder' + (data.length !== 1 ? 's' : '');
+  }
+}
+
+function applyFilters() {
+  const usernameQ = document.getElementById('search-username').value.toLowerCase();
+  const websiteQ = document.getElementById('filter-website').value;
+  const countryQ = document.getElementById('filter-country').value;
+
+  let data = BIDDER_DATA.filter(row => {
+    if (usernameQ && !row.username.toLowerCase().includes(usernameQ)) return false;
+    // Website filter: the bidder must have activity on the selected site.
+    if (websiteQ && !(row.websites || []).includes(websiteQ)) return false;
+    if (countryQ && row.country !== countryQ) return false;
+    return true;
+  });
+
+  data = [...data].sort((a, b) => {
+    let av = a[sortCol];
+    let bv = b[sortCol];
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') av = av.toLowerCase();
+    if (typeof bv === 'string') bv = bv.toLowerCase();
+    if (av < bv) return sortDir === 'asc' ? -1 : 1;
+    if (av > bv) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  render(data);
+}
+
+document.querySelectorAll('th.sortable').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortCol = col;
+      sortDir = NUMERIC_COLS.has(col) ? 'desc' : 'asc';
+    }
+    document.querySelectorAll('th.sortable').forEach(h => {
+      h.classList.remove('sort-asc', 'sort-desc', 'sort-none');
+      h.classList.add(
+        h.dataset.col === sortCol
+          ? (sortDir === 'asc' ? 'sort-asc' : 'sort-desc')
+          : 'sort-none'
+      );
+    });
+    applyFilters();
+  });
+});
+
+['search-username', 'filter-website', 'filter-country'].forEach(id => {
+  document.getElementById(id).addEventListener('input', applyFilters);
+});
+
+applyFilters();
+</script>
 {% endblock %}

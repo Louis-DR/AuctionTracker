@@ -2,46 +2,199 @@
 {% set active_page = "sellers" %}
 {% block title %}Sellers – AuctionTracker{% endblock %}
 
+{% block extra_css %}
+.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.sortable:hover { opacity: 0.75; }
+.sort-none::after { content: " ↕"; font-size: 0.75em; opacity: 0.35; }
+.sort-asc::after  { content: " ▲"; font-size: 0.75em; }
+.sort-desc::after { content: " ▼"; font-size: 0.75em; }
+{% endblock %}
+
 {% block content %}
 <hgroup>
   <h1>Sellers</h1>
-  <p>{{ sellers|length }} seller{{ "s" if sellers|length != 1 else "" }} tracked</p>
+  <p id="result-count" class="muted">
+    {{ seller_data|length }} seller{{ "s" if seller_data|length != 1 else "" }}
+  </p>
 </hgroup>
 
-{% if sellers %}
+{% if seller_data %}
+<form class="filter-form" id="filter-form" onsubmit="return false;">
+  <div class="filter-group-wide">
+    <label for="search-name">Name / username</label>
+    <input type="search" id="search-name" placeholder="Search name or username…">
+  </div>
+  <div class="filter-group">
+    <label for="filter-website">Website</label>
+    <select id="filter-website">
+      <option value="">All websites</option>
+      {% for w in all_website_names %}
+      <option value="{{ w }}">{{ w }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-group">
+    <label for="filter-country">Country</label>
+    <select id="filter-country">
+      <option value="">All countries</option>
+      {% for c in all_countries %}
+      <option value="{{ c }}">{{ c }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</form>
+
 <div style="overflow-x: auto;">
-  <table>
+  <table id="sellers-table">
     <thead>
       <tr>
-        <th>Name</th>
-        <th>Username</th>
-        <th>Website</th>
-        <th>Country</th>
-        <th class="text-right">Rating</th>
-        <th class="text-right">Listings</th>
+        <th class="sortable sort-none" data-col="display_name">Name</th>
+        <th class="sortable sort-none" data-col="website">Website</th>
+        <th class="sortable sort-none" data-col="country">Country</th>
+        <th class="sortable sort-none text-right" data-col="rating">Rating</th>
+        <th class="sortable sort-none text-right" data-col="feedback_count">Feedback</th>
+        <th class="sortable sort-desc text-right" data-col="listing_count">Listings</th>
+        <th class="sortable sort-none text-right" data-col="sold_count">Sold</th>
+        <th class="sortable sort-none text-right" data-col="active_count">Active</th>
+        <th class="sortable sort-none text-right" data-col="volume_eur">Est. Volume</th>
       </tr>
     </thead>
-    <tbody>
-      {% for seller in sellers %}
-      <tr class="clickable-row" onclick="location.href='/sellers/{{ seller.id }}'">
-        <td>{{ seller.display_name or seller.username }}</td>
-        <td class="muted">{{ seller.username }}</td>
-        <td>{{ seller.website.name if seller.website else "?" }}</td>
-        <td>{{ seller.country or "–" }}</td>
-        <td class="text-right">
-          {% if seller.rating is not none %}
-            {{ "%.1f"|format(seller.rating) }} &#9733;
-          {% else %}
-            &ndash;
-          {% endif %}
-        </td>
-        <td class="text-right">{{ seller.listings|length }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
+    <tbody id="sellers-tbody"></tbody>
   </table>
 </div>
 {% else %}
 <p class="muted">No sellers in the database yet.</p>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SELLER_DATA = {{ seller_data | tojson_safe }};
+const DISPLAY_CURRENCY = '{{ display_currency }}';
+
+let sortCol = 'listing_count';
+let sortDir = 'desc';
+
+const NUMERIC_COLS = new Set([
+  'rating', 'feedback_count', 'listing_count',
+  'sold_count', 'active_count', 'volume_eur',
+]);
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function formatCurrency(value) {
+  if (!value) return '–';
+  return new Intl.NumberFormat('fr-FR', {
+    style: 'currency',
+    currency: DISPLAY_CURRENCY,
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function render(data) {
+  const tbody = document.getElementById('sellers-tbody');
+  const countEl = document.getElementById('result-count');
+  if (!tbody) return;
+
+  tbody.innerHTML = data.map(row => {
+    const nameCell = row.display_name !== row.username
+      ? `<strong>${escHtml(row.display_name)}</strong><br>
+         <small class="muted">${escHtml(row.username)}</small>`
+      : `<strong>${escHtml(row.display_name)}</strong>`;
+
+    const rating = row.rating != null
+      ? row.rating.toFixed(1) + ' &#9733;'
+      : '&ndash;';
+
+    const feedback = row.feedback_count > 0
+      ? row.feedback_count.toLocaleString()
+      : '&ndash;';
+
+    return `<tr class="clickable-row" onclick="location.href='/sellers/${row.id}'">
+      <td>${nameCell}</td>
+      <td>${escHtml(row.website) || '&ndash;'}</td>
+      <td>${escHtml(row.country) || '&ndash;'}</td>
+      <td class="text-right no-wrap">${rating}</td>
+      <td class="text-right">${feedback}</td>
+      <td class="text-right">${row.listing_count}</td>
+      <td class="text-right">${row.sold_count > 0 ? row.sold_count : '&ndash;'}</td>
+      <td class="text-right">${row.active_count > 0 ? row.active_count : '&ndash;'}</td>
+      <td class="text-right no-wrap">${formatCurrency(row.volume_eur)}</td>
+    </tr>`;
+  }).join('');
+
+  if (countEl) {
+    countEl.textContent =
+      data.length + ' seller' + (data.length !== 1 ? 's' : '');
+  }
+}
+
+function applyFilters() {
+  const nameQ = document.getElementById('search-name').value.toLowerCase();
+  const websiteQ = document.getElementById('filter-website').value;
+  const countryQ = document.getElementById('filter-country').value;
+
+  let data = SELLER_DATA.filter(row => {
+    if (nameQ && !row.display_name.toLowerCase().includes(nameQ)
+        && !row.username.toLowerCase().includes(nameQ)) {
+      return false;
+    }
+    if (websiteQ && row.website !== websiteQ) return false;
+    if (countryQ && row.country !== countryQ) return false;
+    return true;
+  });
+
+  data = [...data].sort((a, b) => {
+    let av = a[sortCol];
+    let bv = b[sortCol];
+    // Null values always sort last regardless of direction.
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') av = av.toLowerCase();
+    if (typeof bv === 'string') bv = bv.toLowerCase();
+    if (av < bv) return sortDir === 'asc' ? -1 : 1;
+    if (av > bv) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  render(data);
+}
+
+document.querySelectorAll('th.sortable').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortCol = col;
+      sortDir = NUMERIC_COLS.has(col) ? 'desc' : 'asc';
+    }
+    document.querySelectorAll('th.sortable').forEach(h => {
+      h.classList.remove('sort-asc', 'sort-desc', 'sort-none');
+      h.classList.add(
+        h.dataset.col === sortCol
+          ? (sortDir === 'asc' ? 'sort-asc' : 'sort-desc')
+          : 'sort-none'
+      );
+    });
+    applyFilters();
+  });
+});
+
+['search-name', 'filter-website', 'filter-country'].forEach(id => {
+  document.getElementById(id).addEventListener('input', applyFilters);
+});
+
+applyFilters();
+</script>
 {% endblock %}
