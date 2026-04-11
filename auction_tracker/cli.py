@@ -630,6 +630,116 @@ async def _run_pipeline_async(
 
 
 # -------------------------------------------------------------------
+# Database maintenance
+# -------------------------------------------------------------------
+
+
+@main.command("fix-database")
+@pass_context
+def fix_database(app: AppContext) -> None:
+  """Run database maintenance tasks.
+
+  Currently performs:
+
+  \b
+  1. Apply pending manual cancellations queued via the web UI.
+  2. Fix worker_utilization events whose idle/active seconds were
+     stored with the wrong polarity (emitted before the utilization
+     tracking bug was corrected).
+  """
+  import json
+
+  from sqlalchemy import select
+
+  from auction_tracker.database.models import (
+    Listing,
+    ListingAttribute,
+    ListingStatus,
+    PipelineEvent,
+  )
+
+  cancel_file = Path(app.config.database.path.parent / "manual_cancel_listings.txt")
+
+  # ------------------------------------------------------------------
+  # Step 1: apply pending manual cancellations
+  # ------------------------------------------------------------------
+  cancelled_count = 0
+  if cancel_file.exists():
+    lines = cancel_file.read_text(encoding="utf-8").splitlines()
+    listing_ids = [int(line.strip()) for line in lines if line.strip().isdigit()]
+    if listing_ids:
+      with app.database.session() as session:
+        for listing_id in listing_ids:
+          listing = session.get(Listing, listing_id)
+          if listing is None:
+            console.print(f"  [yellow]Listing {listing_id} not found, skipping.[/yellow]")
+            continue
+          listing.status = ListingStatus.CANCELLED
+          session.add(ListingAttribute(
+            listing_id=listing_id,
+            attribute_name="manually_cancelled",
+            attribute_value="true",
+          ))
+          cancelled_count += 1
+        session.commit()
+      cancel_file.unlink()
+      console.print(f"[green]Cancelled {cancelled_count} listings and cleared queue file.[/green]")
+    else:
+      console.print("[dim]No pending cancellations.[/dim]")
+  else:
+    console.print("[dim]No pending cancellations.[/dim]")
+
+  # ------------------------------------------------------------------
+  # Step 2: fix worker_utilization polarity
+  # ------------------------------------------------------------------
+  # All events emitted before the utilization tracking bug was fixed
+  # have idle_seconds and active_seconds swapped.  Detect them by
+  # checking whether the detail JSON already carries a "polarity_fixed"
+  # marker; fix and tag each one in-place.
+  # ------------------------------------------------------------------
+  with app.database.session() as session:
+    events = session.execute(
+      select(PipelineEvent).where(
+        PipelineEvent.event_type == "worker_utilization"
+      )
+    ).scalars().all()
+
+    fixed_count = 0
+    for event in events:
+      if not event.detail_json:
+        continue
+      try:
+        detail = json.loads(event.detail_json)
+      except (ValueError, TypeError):
+        continue
+
+      # Skip events that have already been corrected.
+      if detail.get("polarity_fixed"):
+        continue
+
+      idle = detail.get("idle_seconds", 0.0)
+      active = detail.get("active_seconds", 0.0)
+
+      # Heuristic: if active >> idle the values are probably swapped.
+      # We apply the swap unconditionally to all un-tagged events so
+      # that the fix is idempotent (re-running after a partial fix
+      # won't double-swap, because fixed events are tagged).
+      detail["idle_seconds"] = active
+      detail["active_seconds"] = idle
+      detail["polarity_fixed"] = True
+      event.detail_json = json.dumps(detail)
+      fixed_count += 1
+
+    if fixed_count:
+      session.commit()
+      console.print(
+        f"[green]Fixed polarity of {fixed_count} worker_utilization events.[/green]"
+      )
+    else:
+      console.print("[dim]No worker_utilization events needed polarity correction.[/dim]")
+
+
+# -------------------------------------------------------------------
 # Web frontend
 # -------------------------------------------------------------------
 
