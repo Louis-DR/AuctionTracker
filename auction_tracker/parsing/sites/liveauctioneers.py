@@ -398,7 +398,12 @@ def _parse_seller(item: dict) -> ScrapedSeller | None:
     username=seller_name,
     display_name=seller_name,
     country=item.get("sellerCountryCode") or None,
-    rating=item.get("houseRating"),
+    # houseRating is a 0-5 star rating; convert to 0-100.
+    rating=(
+      round(float(item["houseRating"]) * 20, 1)
+      if item.get("houseRating") is not None
+      else None
+    ),
     feedback_count=item.get("houseReviewCount"),
     profile_url=profile_url,
   )

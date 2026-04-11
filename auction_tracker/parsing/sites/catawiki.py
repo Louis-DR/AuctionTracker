@@ -376,7 +376,9 @@ def _parse_seller(seller_info: dict | None) -> ScrapedSeller | None:
   country_code = (country_block.get("shortCode") or "").upper() or None
 
   score_block = seller_info.get("score") or {}
-  rating = score_block.get("score")
+  raw_score = score_block.get("score")
+  # Catawiki score is a 0-5 star rating; convert to 0-100.
+  rating = round(float(raw_score) * 20, 1) if raw_score is not None else None
   feedback_count = score_block.get("lifetimeCount")
 
   member_since = None

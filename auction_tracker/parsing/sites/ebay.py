@@ -274,13 +274,26 @@ class EbayParser(Parser):
     condition = _CONDITION_MAP.get(condition_id or "", "unknown")
 
     # Seller.
+    # positiveFeedbackPercent is stored as a quoted string "99.4" in the
+    # Marko.js blob; feedbackScore is a plain integer.
     seller_username = _script_str(data_script, "sellerUserName") or ""
     seller = None
     if seller_username:
+      feedback_pct_str = _script_str(data_script, "positiveFeedbackPercent")
+      feedback_pct = float(feedback_pct_str) if feedback_pct_str else None
+      feedback_score_match = re.search(
+        r'"feedbackScore"\s*:\s*(\d+)', data_script,
+      )
+      feedback_score = (
+        int(feedback_score_match.group(1)) if feedback_score_match else None
+      )
       seller = ScrapedSeller(
         external_id=seller_username,
         username=seller_username,
         display_name=seller_username,
+        # Positive feedback percentage is natively 0-100.
+        rating=feedback_pct,
+        feedback_count=feedback_score,
       )
 
     # Shipping.

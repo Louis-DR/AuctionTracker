@@ -55,7 +55,7 @@
         <th class="sortable sort-none" data-col="display_name">Name</th>
         <th class="sortable sort-none" data-col="website">Website</th>
         <th class="sortable sort-none" data-col="country">Country</th>
-        <th class="sortable sort-none text-right" data-col="rating">Rating</th>
+        <th class="sortable sort-none text-right" data-col="rating">Score&nbsp;/100</th>
         <th class="sortable sort-none text-right" data-col="feedback_count">Feedback</th>
         <th class="sortable sort-desc text-right" data-col="listing_count">Listings</th>
         <th class="sortable sort-none text-right" data-col="sold_count">Sold</th>
@@ -113,7 +113,7 @@ function render(data) {
       : `<strong>${escHtml(row.display_name)}</strong>`;
 
     const rating = row.rating != null
-      ? row.rating.toFixed(1) + ' &#9733;'
+      ? row.rating.toFixed(1)
       : '&ndash;';
 
     const feedback = row.feedback_count > 0

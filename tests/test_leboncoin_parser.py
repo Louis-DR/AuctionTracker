@@ -278,8 +278,8 @@ class TestActiveListing:
     html = _read_fixture("listing_active.html")
     listing = parser.parse_listing(html)
     assert listing.seller is not None
-    # Rating 0.92 * 5 = 4.6
-    assert listing.seller.rating == 4.6
+    # Rating 0.92 * 100 = 92.0
+    assert listing.seller.rating == 92.0
     assert listing.seller.feedback_count == 47
 
   def test_seller_profile_url(self, parser: LeBonCoinParser):
@@ -555,7 +555,7 @@ class TestExtractSeller:
     assert seller.external_id == "store_123"
     assert seller.username == "TestSeller"
     assert seller.display_name == "TestSeller (private)"
-    assert seller.rating == 4.0
+    assert seller.rating == 80.0  # 0.8 * 100
     assert seller.feedback_count == 10
     assert seller.country == "FR"
     assert "uuid-abc" in seller.profile_url

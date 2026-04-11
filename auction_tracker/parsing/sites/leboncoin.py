@@ -456,9 +456,9 @@ def _extract_seller(ad: dict) -> ScrapedSeller | None:
     key = attr_dict.get("key", "")
     if key == "rating_score":
       with contextlib.suppress(ValueError, TypeError):
-        # LeBonCoin rating is 0-1; scale to 0-5 for consistency.
+        # LeBonCoin rating_score is 0-1; convert to 0-100.
         raw_rating = float(attr_dict.get("value", "0"))
-        rating = round(raw_rating * 5, 2)
+        rating = round(raw_rating * 100, 1)
     elif key == "rating_count":
       with contextlib.suppress(ValueError, TypeError):
         feedback_count = int(attr_dict.get("value", "0"))

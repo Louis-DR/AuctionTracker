@@ -161,6 +161,8 @@ class TestListingParsing:
 
     assert listing.seller is not None
     assert listing.seller.username == "pen_collector_99"
+    assert listing.seller.rating == 99.4
+    assert listing.seller.feedback_count == 2847
 
   def test_auction_dates(self, parser: EbayParser):
     html = _read_fixture("listing_auction.html")

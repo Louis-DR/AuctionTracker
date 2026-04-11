@@ -182,7 +182,7 @@ class TestActiveLotParsing:
     assert listing.seller.username == "pendealer_nl"
     assert listing.seller.display_name == "Pen Dealer Netherlands"
     assert listing.seller.country == "NL"
-    assert listing.seller.rating == 4.8
+    assert listing.seller.rating == 96.0  # 4.8 / 5 * 100
     assert listing.seller.feedback_count == 312
     assert listing.seller.member_since is not None
     assert listing.seller.profile_url is not None
@@ -453,7 +453,7 @@ class TestHelpers:
     assert seller.username == "pen_collector"
     assert seller.display_name == "Pen Collector Shop"
     assert seller.country == "FR"
-    assert seller.rating == 4.7
+    assert seller.rating == 94.0  # 4.7 / 5 * 100
     assert seller.feedback_count == 200
     assert str(seller.member_since) == "2020-01-15"
     assert seller.profile_url == "https://www.catawiki.com/en/seller/12345"
