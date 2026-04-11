@@ -7,8 +7,12 @@ systems than Playwright Chromium with JS-level stealth patches.
 Key features used here:
 - ``humanize=True``: built-in realistic mouse movement and scrolling
 - ``geoip=True``: automatic timezone/locale/geo matching
+- ``block_webrtc=True``: prevents WebRTC IP leaks
+- ``disable_coop=True``: allows clicking DataDome captcha iframes
 - Persistent browser profile to accumulate cookies across sessions
 - Non-headless by default (strongest anti-detection posture)
+- Firefox lock file cleanup (ported from legacy) to prevent
+  stale locks from corrupting the profile
 """
 
 from __future__ import annotations
@@ -38,6 +42,38 @@ _DATADOME_MARKERS = (
 )
 
 _OS_MAP = {"darwin": "macos", "linux": "linux", "windows": "windows"}
+
+# Stale Firefox lock files that prevent profile reuse after a crash.
+_FIREFOX_LOCK_FILES = ("parent.lock", "lock", ".parentlock")
+
+
+def _clean_firefox_locks(profile_path: Path) -> None:
+  """Remove stale Firefox lock files from a profile directory.
+
+  When Camoufox (or Firefox) crashes or is killed without proper
+  shutdown, it leaves lock files behind. These prevent subsequent
+  launches from reusing the persistent profile. The legacy scraper
+  handled this explicitly and it is critical for reliability.
+  """
+  if not profile_path.exists():
+    return
+  for lock_name in _FIREFOX_LOCK_FILES:
+    lock_file = profile_path / lock_name
+    if not lock_file.exists():
+      continue
+    for attempt in range(5):
+      try:
+        lock_file.unlink()
+        logger.info("Removed stale Firefox lock file: %s", lock_file)
+        break
+      except OSError:
+        if attempt < 4:
+          time.sleep(1)
+        else:
+          logger.warning(
+            "Could not remove %s after 5 attempts — profile may fail to open",
+            lock_file,
+          )
 
 
 class CamoufoxTransport(Transport):
@@ -81,6 +117,8 @@ class CamoufoxTransport(Transport):
     profile_path = self._profile_directory / "camoufox"
     profile_path.mkdir(parents=True, exist_ok=True)
 
+    _clean_firefox_locks(profile_path)
+
     self._camoufox = AsyncCamoufox(
       persistent_context=True,
       user_data_dir=str(profile_path),
@@ -90,6 +128,9 @@ class CamoufoxTransport(Transport):
       locale="fr-FR",
       geoip=True,
       enable_cache=True,
+      block_webrtc=True,
+      disable_coop=True,
+      i_know_what_im_doing=True,
     )
     self._context = await self._camoufox.__aenter__()
     self._context.set_default_timeout(self._timeout_ms)
@@ -100,7 +141,7 @@ class CamoufoxTransport(Transport):
       self._page = await self._context.new_page()
 
     logger.info(
-      "Camoufox transport started (profile=%s, os=%s)",
+      "Camoufox transport started (profile=%s, os=%s, webrtc=blocked, coop=disabled)",
       profile_path, target_os,
     )
 
@@ -145,15 +186,15 @@ class CamoufoxTransport(Transport):
     homepage = f"https://www.{domain}/"
     logger.info("Warming up Camoufox session for %s", domain)
     try:
-      await page.goto(homepage, wait_until="domcontentloaded", timeout=20_000)
+      await page.goto(homepage, wait_until="domcontentloaded", timeout=30_000)
       with contextlib.suppress(Exception):
-        await page.wait_for_load_state("networkidle", timeout=8000)
+        await page.wait_for_load_state("networkidle", timeout=10_000)
 
       # Let the page settle and Camoufox's humanize do its thing.
-      await asyncio.sleep(random.uniform(1.0, 2.0))
+      await asyncio.sleep(random.uniform(1.5, 3.0))
       await self._simulate_human_behavior(page)
       await self._dismiss_cookie_consent(page)
-      await asyncio.sleep(random.uniform(0.5, 1.0))
+      await asyncio.sleep(random.uniform(0.5, 1.5))
 
       self._warmed_up_domains.add(domain)
       logger.debug("Warm-up complete for %s", domain)
@@ -229,11 +270,17 @@ class CamoufoxTransport(Transport):
       )
     return False
 
-  async def _wait_for_datadome(self, page, max_wait: float = 20.0) -> None:
+  async def _wait_for_datadome(self, page, max_wait: float = 30.0) -> None:
+    """Wait for a DataDome challenge to resolve.
+
+    DataDome sometimes presents a slider captcha that the user must
+    solve manually (when running headful). The 30 s window gives
+    enough time for manual intervention in headful mode.
+    """
     if not await self._is_datadome_challenge(page):
       return
 
-    logger.info("DataDome challenge detected, waiting for resolution...")
+    logger.info("DataDome challenge detected, waiting up to %.0fs for resolution...", max_wait)
     start = time.monotonic()
     while time.monotonic() - start < max_wait:
       await asyncio.sleep(2.0)
@@ -261,7 +308,7 @@ class CamoufoxTransport(Transport):
           await self._warm_up_domain(page, domain)
 
       # Small random pre-navigation delay.
-      await asyncio.sleep(random.uniform(0.3, 1.0))
+      await asyncio.sleep(random.uniform(0.5, 1.5))
 
       await page.goto(
         url,
@@ -270,20 +317,19 @@ class CamoufoxTransport(Transport):
       )
 
       with contextlib.suppress(Exception):
-        await page.wait_for_load_state("networkidle", timeout=8000)
+        await page.wait_for_load_state("networkidle", timeout=10_000)
 
       await self._simulate_human_behavior(page)
       await self._wait_for_datadome(page)
       await self._dismiss_cookie_consent(page)
 
       # Post-navigation settle time.
-      await asyncio.sleep(random.uniform(0.5, 1.5))
+      await asyncio.sleep(random.uniform(0.5, 2.0))
 
       html = await page.content()
       elapsed = time.monotonic() - start_time
       final_url = page.url
 
-      # Only raise blocked if the page is still a tiny challenge page.
       if len(html) < 5000 and await self._is_datadome_challenge(page):
         raise TransportBlocked(
           f"Camoufox blocked by DataDome on {url}",

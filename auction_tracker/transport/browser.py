@@ -1,5 +1,10 @@
 """Browser transport using Playwright async API.
 
+Prefers ``rebrowser-playwright`` (a patched fork that fixes Chrome
+DevTools Protocol leak vectors exploited by DataDome, Cloudflare, and
+similar anti-bot systems) and falls back to vanilla ``playwright`` when
+the patched version is not installed.
+
 Designed to be simple and robust:
 - Pure async, no threading
 - Single browser instance with a tab semaphore
@@ -15,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import platform
 import random
 import time
 from urllib.parse import urlparse
@@ -35,6 +41,72 @@ _DATADOME_MARKERS = (
   "dd.js",
 )
 
+# Chrome launch arguments that reduce automation fingerprint leaks.
+_STEALTH_CHROME_ARGS = [
+  "--disable-blink-features=AutomationControlled",
+  "--disable-features=AutomationControlled",
+  "--disable-infobars",
+  "--no-first-run",
+  "--no-default-browser-check",
+  "--disable-background-networking",
+  "--disable-component-update",
+  "--disable-domain-reliability",
+  "--disable-sync",
+  "--metrics-recording-only",
+  "--no-service-autorun",
+]
+
+
+def _build_user_agent() -> str:
+  """Build a Chrome user-agent string matching the host OS.
+
+  DataDome and similar systems correlate the UA OS with low-level
+  platform signals (navigator.platform, canvas font metrics, etc.).
+  Claiming macOS while running on Windows is an instant red flag.
+  """
+  system = platform.system().lower()
+  if system == "darwin":
+    platform_token = "Macintosh; Intel Mac OS X 10_15_7"
+  elif system == "linux":
+    platform_token = "X11; Linux x86_64"
+  else:
+    platform_token = "Windows NT 10.0; Win64; x64"
+  return (
+    f"Mozilla/5.0 ({platform_token}) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+  )
+
+
+def _import_async_playwright():
+  """Import async_playwright, preferring the rebrowser-patched fork.
+
+  ``rebrowser-playwright`` patches Chromium DevTools Protocol leak
+  vectors (Runtime.enable, sourceURL injection, main-world execution
+  context tracking) that DataDome and Cloudflare use to detect
+  automation.  It is a strict superset of the official Playwright API,
+  so all existing code works unchanged.
+  """
+  try:
+    from rebrowser_playwright.async_api import async_playwright
+    logger.info("Using rebrowser-playwright (CDP leak patches active)")
+    return async_playwright
+  except ImportError:
+    pass
+
+  try:
+    from playwright.async_api import async_playwright
+    logger.info(
+      "rebrowser-playwright not installed; using vanilla playwright. "
+      "Install rebrowser-playwright for stronger anti-detection."
+    )
+    return async_playwright
+  except ImportError:
+    raise ImportError(
+      "Neither rebrowser-playwright nor playwright is installed. "
+      "Install with: pip install 'auction-tracker[browser]'"
+    )
+
 
 class BrowserTransport(Transport):
   """Async browser transport using Playwright.
@@ -44,9 +116,11 @@ class BrowserTransport(Transport):
   first use and shut down on stop().
 
   Anti-bot features:
+  - rebrowser-playwright patches (CDP leak vectors fixed)
   - playwright-stealth patches applied to the entire browser context
     (navigator.webdriver, missing plugins, CDP exposure, etc.)
-  - --disable-blink-features=AutomationControlled Chrome flag
+  - Extensive Chrome anti-automation flags
+  - OS-appropriate user-agent to match platform fingerprint signals
   - DataDome challenge detection: waits up to 15 s for auto-resolution
     before giving up (handles both HTTP 200 and 403 interstitials)
   - Automatic Didomi / common cookie consent dismissal
@@ -78,40 +152,28 @@ class BrowserTransport(Transport):
     return "browser"
 
   async def start(self) -> None:
-    try:
-      from playwright.async_api import async_playwright
-    except ImportError as error:
-      raise ImportError(
-        "Playwright is required for browser transport. "
-        "Install it with: pip install 'auction-tracker[browser]'"
-      ) from error
+    async_playwright = _import_async_playwright()
 
     self._playwright = await async_playwright().start()
     self._browser = await self._playwright.chromium.launch(
       headless=self._headless,
-      args=[
-        # Hide the automation flag that Chrome exposes by default.
-        "--disable-blink-features=AutomationControlled",
-      ],
+      args=_STEALTH_CHROME_ARGS,
     )
+
+    user_agent = _build_user_agent()
     self._context = await self._browser.new_context(
-      user_agent=(
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-      ),
+      user_agent=user_agent,
       viewport={"width": 1920, "height": 1080},
       locale="fr-FR",
     )
 
-    # Apply stealth patches to the whole context so that every page
-    # inherits them. The v2 API applies init scripts at context level.
     self._stealth_available = await self._apply_stealth_to_context()
 
     self._semaphore = asyncio.Semaphore(self._max_pages)
     logger.info(
-      "Browser transport started (headless=%s, max_pages=%d, stealth=%s)",
+      "Browser transport started (headless=%s, max_pages=%d, stealth=%s, ua=%s)",
       self._headless, self._max_pages, self._stealth_available,
+      "rebrowser" if "rebrowser" in str(type(self._playwright)) else "vanilla",
     )
 
   async def _apply_stealth_to_context(self) -> bool:
@@ -126,7 +188,6 @@ class BrowserTransport(Transport):
     try:
       from playwright_stealth import Stealth
       stealth = Stealth(
-        # Override navigator.languages to match the fr-FR locale we set.
         navigator_languages_override=("fr-FR", "fr"),
       )
       await stealth.apply_stealth_async(self._context)
@@ -175,16 +236,17 @@ class BrowserTransport(Transport):
     homepage = f"https://www.{domain}/"
     logger.info("Warming up browser session for %s", domain)
     try:
-      await page.goto(homepage, wait_until="domcontentloaded", timeout=15_000)
+      await page.goto(homepage, wait_until="domcontentloaded", timeout=20_000)
       with contextlib.suppress(Exception):
-        await page.wait_for_load_state("networkidle", timeout=5000)
+        await page.wait_for_load_state("networkidle", timeout=8000)
+      await asyncio.sleep(random.uniform(1.0, 2.0))
       await self._simulate_human_behavior(page)
       await self._dismiss_cookie_consent(page)
+      await asyncio.sleep(random.uniform(0.5, 1.0))
       self._warmed_up_domains.add(domain)
       logger.debug("Warm-up complete for %s", domain)
     except Exception as error:
       logger.warning("Homepage warm-up for %s failed: %s", domain, error)
-      # Mark as done anyway so we don't keep retrying on every fetch.
       self._warmed_up_domains.add(domain)
 
   @staticmethod
@@ -243,7 +305,7 @@ class BrowserTransport(Transport):
       with contextlib.suppress(Exception):
         button = page.locator(selector).first
         if await button.is_visible(timeout=500):
-          await asyncio.sleep(0.5)
+          await asyncio.sleep(random.uniform(0.3, 0.8))
           await button.click()
           logger.debug("Dismissed cookie consent via %s", selector)
           await asyncio.sleep(0.5)
@@ -314,6 +376,9 @@ class BrowserTransport(Transport):
           if domain:
             await self._warm_up_domain(page, domain)
 
+        # Small random pre-navigation delay to vary timing.
+        await asyncio.sleep(random.uniform(0.3, 1.0))
+
         response = await page.goto(
           url,
           wait_until=wait_until,
@@ -322,30 +387,30 @@ class BrowserTransport(Transport):
 
         status_code = response.status if response else 0
 
-        # Wait for network to settle (helps with JS-rendered content).
         with contextlib.suppress(Exception):
-          await page.wait_for_load_state("networkidle", timeout=5000)
+          await page.wait_for_load_state("networkidle", timeout=8000)
 
-        # Simulate human interaction before anti-bot checks run their
-        # analysis. DataDome monitors pointer and scroll events, so a
-        # page without any mouse activity is flagged as automation.
         await self._simulate_human_behavior(page)
-
-        # Handle DataDome challenge regardless of HTTP status code.
-        # A 403 from DataDome still delivers HTML that auto-resolves.
         await self._wait_for_datadome(page)
-
-        # Dismiss cookie consent after any challenge has resolved.
         await self._dismiss_cookie_consent(page)
+
+        # Post-navigation settle time.
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+
+        # DataDome's JS can close or navigate the page during the
+        # challenge wait. Treat a dead page as a block signal.
+        if page.is_closed():
+          raise TransportBlocked(
+            f"Page closed during DataDome handling for {url}",
+            url=url,
+            status_code=403,
+          )
 
         html = await page.content()
         elapsed = time.monotonic() - start_time
         final_url = page.url
 
-        # Raise a persistent block only if the page is still a 403/429/503
-        # AND it did not resolve into real content.
         if status_code in (403, 429, 503) and page.url == url:
-          # Check whether we actually got useful content.
           if len(html) < 5000:
             raise TransportBlocked(
               f"Browser blocked by {url} (HTTP {status_code})",
@@ -375,14 +440,26 @@ class BrowserTransport(Transport):
       except Exception as error:
         elapsed = time.monotonic() - start_time
         error_name = type(error).__name__
-        if "timeout" in error_name.lower() or "Timeout" in str(error):
+        error_str = str(error)
+        if "timeout" in error_name.lower() or "Timeout" in error_str:
           raise TransportTimeout(
             f"Browser timeout after {elapsed:.1f}s for {url}",
             url=url,
+          ) from error
+        # TargetClosedError means the page/context was destroyed
+        # (e.g. by DataDome redirect). Surface as TransportBlocked
+        # so the router can try the fallback transport.
+        if "TargetClosedError" in error_name or "Target closed" in error_str:
+          raise TransportBlocked(
+            f"Browser page closed (likely anti-bot) for {url}",
+            url=url,
+            status_code=403,
           ) from error
         raise TransportError(
           f"Browser error for {url}: {error}",
           url=url,
         ) from error
       finally:
-        await page.close()
+        with contextlib.suppress(Exception):
+          if not page.is_closed():
+            await page.close()

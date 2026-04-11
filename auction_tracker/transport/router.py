@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from auction_tracker.config import AppConfig, TransportKind
+from auction_tracker.config import AppConfig, TransportKind, WebsiteConfig
 from auction_tracker.transport.base import (
   FetchResult,
   Transport,
@@ -130,24 +130,46 @@ class TransportRouter:
     try:
       return await primary.fetch(url, **kwargs)
     except TransportBlocked:
-      if website_config.fallback_transport is not None:
-        logger.warning(
-          "Primary transport (%s) blocked for %s on %s, "
-          "falling back to %s",
-          primary.name, url, website_name,
-          website_config.fallback_transport.value,
-        )
-        fallback = await self._get_transport_async(website_config.fallback_transport)
+      fallback = await self._resolve_fallback(website_config, primary, url, website_name)
+      if fallback is not None:
         return await fallback.fetch(url, **kwargs)
       raise
     except TransportError:
-      if website_config.fallback_transport is not None:
-        logger.warning(
-          "Primary transport (%s) failed for %s on %s, "
-          "falling back to %s",
-          primary.name, url, website_name,
-          website_config.fallback_transport.value,
-        )
-        fallback = await self._get_transport_async(website_config.fallback_transport)
+      fallback = await self._resolve_fallback(website_config, primary, url, website_name)
+      if fallback is not None:
         return await fallback.fetch(url, **kwargs)
       raise
+
+  async def _resolve_fallback(
+    self,
+    website_config: WebsiteConfig,
+    primary: Transport,
+    url: str,
+    website_name: str,
+  ) -> Transport | None:
+    """Return the fallback transport, or None if no useful fallback exists.
+
+    Avoids retrying on the same transport instance (e.g. when a
+    config.yaml override sets both primary and fallback to the same
+    kind).
+    """
+    if website_config.fallback_transport is None:
+      return None
+    if website_config.fallback_transport == website_config.transport:
+      logger.debug(
+        "Skipping fallback for %s on %s: primary and fallback are both %s",
+        url, website_name, website_config.transport.value,
+      )
+      return None
+    fallback = await self._get_transport_async(website_config.fallback_transport)
+    if fallback is primary:
+      logger.debug(
+        "Skipping fallback for %s on %s: resolved to the same transport instance",
+        url, website_name,
+      )
+      return None
+    logger.warning(
+      "Primary transport (%s) failed for %s on %s, falling back to %s",
+      primary.name, url, website_name, website_config.fallback_transport.value,
+    )
+    return fallback
