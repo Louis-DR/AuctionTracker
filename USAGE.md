@@ -93,7 +93,7 @@ Display a table of all registered parsers and their declared capabilities (searc
 auction-tracker parsers
 ```
 
-No options. Currently only `ebay` is registered.
+No options.
 
 ---
 
@@ -117,29 +117,22 @@ Create a saved search query that will be run automatically by `discover` and `ru
 auction-tracker add-search QUERY [OPTIONS]
 ```
 
-| Argument / Option | Required       | Description                                                                                                     |
-| ----------------- | -------------- | --------------------------------------------------------------------------------------------------------------- |
-| `QUERY`           | Yes            | The search text (e.g. `"montblanc 149"`). Quote it if it contains spaces.                                       |
-| `--name TEXT`     | No             | Display name for the search. Defaults to the query text.                                                        |
-| `--website TEXT`  | No, repeatable | Restrict to one or more websites. Repeat the flag for multiple websites. Omit to create a cross-website search. |
+| Argument / Option | Required | Description                                                               |
+| ----------------- | -------- | ------------------------------------------------------------------------- |
+| `QUERY`           | Yes      | The search text (e.g. `"montblanc 149"`). Quote it if it contains spaces. |
+| `--name TEXT`     | No       | Display name for the search. Defaults to the query text.                  |
+
+Saved searches are global: they run on **every** enabled website that supports search. Use the per-website `enabled` / `exclude_from_discovery` flags in `config.yaml` to control which websites participate.
 
 **Examples:**
 
 ```bash
-# One website
-auction-tracker add-search "fountain pen" --website ebay
-
-# Multiple websites
-auction-tracker add-search "montblanc" --website ebay --website catawiki
-
-# Custom name
-auction-tracker add-search "stylo plume" --name "Stylo plume eBay" --website ebay
-
-# No website restriction (all parsers will run it)
-auction-tracker add-search "pelikan m800"
+auction-tracker add-search "fountain pen"
+auction-tracker add-search "montblanc 149"
+auction-tracker add-search "stylo plume" --name "Stylo plume (FR)"
 ```
 
-> **Note:** The website must already exist in the database (run `seed-websites` first).
+> **Note:** Websites must already exist in the database (run `seed-websites` first).
 
 ---
 
@@ -326,26 +319,32 @@ auction-tracker listings --status cancelled
 
 ### `run`
 
-Run the full pipeline in sequence: discover new listings, fetch details and classify, then monitor active listings. This is the main command for regular operation.
+Run the full pipeline: discover new listings, fetch details, classify, and monitor active listings. This is the main command for regular operation.
+
+Each enabled website gets its own **async worker** that runs concurrently with the others. Within each worker, operations are interleaved in priority order — watch checks (time-sensitive) go first, then pending fetches, then search queries — so every website's rate limit is fully saturated without any cross-website blocking.
 
 ```bash
 auction-tracker run [OPTIONS]
 ```
 
-| Option           | Default | Description                                                                |
-| ---------------- | ------- | -------------------------------------------------------------------------- |
-| `--website TEXT` | all     | Only process this website.                                                 |
-| `--no-classify`  | off     | Skip image download and CLIP classification.                               |
-| `--once`         | off     | After discovery and fetch, do a single monitoring pass instead of looping. |
+| Option                 | Default | Description                                                             |
+| ---------------------- | ------- | ----------------------------------------------------------------------- |
+| `--website TEXT`       | all     | Only process this website.                                              |
+| `--no-classify`        | off     | Skip image download and CLIP classification.                            |
+| `--once`               | off     | Single pass (search + fetch + watch once), then exit.                   |
+| `--discover-interval`  | 30      | Minutes between search cycles in continuous mode.                       |
 
 **Examples:**
 
 ```bash
-# Standard nightly run: discover, classify, then monitor continuously
+# Standard operation: all websites in parallel, continuous
 auction-tracker run
 
-# First-time test: one full pass without the continuous loop
+# First-time test: one full pass without looping
 auction-tracker run --once
+
+# Search every 15 minutes instead of 30
+auction-tracker run --discover-interval 15
 
 # Skip classification (faster, no torch required)
 auction-tracker run --no-classify
@@ -354,10 +353,15 @@ auction-tracker run --no-classify
 auction-tracker run --website ebay --once
 ```
 
-**What it does in order:**
-1. **Step 1 — Discover:** Runs all saved searches, ingests new listings.
-2. **Step 2 — Fetch & Classify:** Fetches full detail pages, downloads images, runs CLIP. Rejects non-pen listings.
-3. **Step 3 — Monitor:** Loads all active listings into the priority queue and either runs one pass (`--once`) or loops continuously.
+**Per-website worker architecture:**
+
+Each website worker maintains three internal queues:
+
+1. **Watch queue** — priority heap of active listings ordered by next check time. IMMINENT checks (auction ending within minutes) preempt everything else.
+2. **Fetch queue** — listings discovered via search but not yet fully fetched.
+3. **Search deque** — saved queries run one per tick so that watch checks and fetches can interleave between queries.
+
+On every tick the worker picks the single highest-priority task, executes it, then sleeps for the website's `request_delay`. This naturally saturates the rate limit: when watch checks aren't due, fetches drain the backlog; when the backlog is empty, searches fill the idle time.
 
 ---
 
@@ -429,10 +433,12 @@ websites:
     request_delay: 3s
     monitoring_strategy: snapshot
   leboncoin:
-    transport: browser       # LeBonCoin requires a full browser (DataDome)
+    transport: camoufox      # LeBonCoin uses DataDome — Camoufox (Firefox fork
+                             # with C++ fingerprint masking) is the primary
+                             # transport; browser (rebrowser-playwright) is fallback.
+    fallback_transport: browser
     monitoring_strategy: snapshot
-    # Browser transport auto-warms up the domain (homepage visit) and
-    # uses playwright-stealth + DataDome challenge waiting.
+    request_delay: 4s
   drouot:
     transport: http
     monitoring_strategy: post_auction
@@ -455,7 +461,7 @@ auction-tracker web [OPTIONS]
 | Option        | Default     | Description                                            |
 | ------------- | ----------- | ------------------------------------------------------ |
 | `--host TEXT` | `127.0.0.1` | Bind address. Use `0.0.0.0` to allow external access.  |
-| `--port INT`  | `5000`      | Port to listen on.                                     |
+| `--port INT`  | `5001`      | Port to listen on.                                     |
 | `--debug`     | off         | Enable Flask debug mode (auto-reload on code changes). |
 
 **Examples:**
@@ -493,26 +499,27 @@ auction-tracker web --debug
 ```bash
 auction-tracker init-db
 auction-tracker seed-websites
-auction-tracker add-search "fountain pen" --website ebay
-auction-tracker add-search "montblanc" --website ebay
-auction-tracker add-search "pelikan souveran" --website ebay
-auction-tracker add-search "stylo plume" --website leboncoin
-auction-tracker add-search "stylo plume montblanc" --website catawiki
-auction-tracker run --once    # Test one full cycle
+auction-tracker add-search "fountain pen"
+auction-tracker add-search "montblanc"
+auction-tracker add-search "pelikan souveran"
+auction-tracker add-search "stylo plume"
+auction-tracker run --once    # Test one full cycle (all websites in parallel)
 auction-tracker listings      # Verify listings were ingested
 ```
 
-### Daily monitoring (cron)
+### Continuous monitoring (recommended)
+
+Run as a persistent process — each website works at its own pace:
+
+```bash
+auction-tracker run           # All websites in parallel, Ctrl+C to stop
+```
+
+Or as a cron job for periodic single-pass runs:
 
 ```bash
 # In crontab: run every 15 minutes
 */15 * * * * cd /path/to/project && .venv/bin/auction-tracker run --once --no-classify
-```
-
-Or run as a persistent process:
-
-```bash
-auction-tracker run           # Loops until Ctrl+C
 ```
 
 ### Adding a specific listing manually
