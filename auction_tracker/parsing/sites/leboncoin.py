@@ -32,10 +32,10 @@ import contextlib
 import json
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from auction_tracker.parsing.base import (
   Parser,
@@ -56,7 +56,35 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 
 _BASE_URL = "https://www.leboncoin.fr"
-_PARIS_TZ = ZoneInfo("Europe/Paris")
+_PARIS_TIMEZONE_KEY = "Europe/Paris"
+_PARIS_TIMEZONE: tzinfo | None = None
+_PARIS_TIMEZONE_WARNING_EMITTED = False
+
+
+def _get_paris_timezone() -> tzinfo:
+  """Return Europe/Paris if tzdata is available, otherwise UTC.
+
+  On Windows, ``zoneinfo`` requires the ``tzdata`` package for all
+  zone lookups including UTC. When it is missing we fall back to
+  ``datetime.UTC`` (stdlib, always available) so parsing never crashes.
+  """
+  global _PARIS_TIMEZONE, _PARIS_TIMEZONE_WARNING_EMITTED
+
+  if _PARIS_TIMEZONE is not None:
+    return _PARIS_TIMEZONE
+
+  try:
+    _PARIS_TIMEZONE = ZoneInfo(_PARIS_TIMEZONE_KEY)
+    return _PARIS_TIMEZONE
+  except (ZoneInfoNotFoundError, ModuleNotFoundError):
+    if not _PARIS_TIMEZONE_WARNING_EMITTED:
+      _PARIS_TIMEZONE_WARNING_EMITTED = True
+      logger.warning(
+        "Could not load time zone %r. "
+        "Install tzdata (`pip install tzdata`) to enable proper DST handling.",
+        _PARIS_TIMEZONE_KEY,
+      )
+    return UTC
 
 # Map LeBonCoin condition slugs to our normalised strings.
 _CONDITION_MAP: dict[str, str] = {
@@ -603,7 +631,7 @@ def _parse_leboncoin_datetime(value: str | None) -> datetime | None:
   try:
     naive = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
     # Interpret as Paris time, then convert to UTC.
-    paris_dt = naive.replace(tzinfo=_PARIS_TZ)
+    paris_dt = naive.replace(tzinfo=_get_paris_timezone())
     return paris_dt.astimezone(UTC)
   except (ValueError, TypeError):
     return None
