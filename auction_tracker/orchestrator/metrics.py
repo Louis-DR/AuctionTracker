@@ -13,7 +13,9 @@ Two independent systems:
 
 Event types (MetricsCollector):
   search_run, fetch_batch, watch_cycle, watch_check,
-  classification, error, pipeline_start, pipeline_stop.
+  classification, error,
+  worker_utilization (idle/active seconds, fetch/watch/search queue sizes),
+  pipeline_start, pipeline_stop.
 """
 
 from __future__ import annotations
@@ -135,8 +137,35 @@ class MetricsCollector:
       "errors": errors,
     })
 
-  def watch_check(self, website_name: str, external_id: str) -> None:
-    self._emit("watch_check", website_name, {"external_id": external_id})
+  def watch_check(
+    self,
+    website_name: str,
+    external_id: str,
+    delay_seconds: float = 0.0,
+  ) -> None:
+    self._emit("watch_check", website_name, {
+      "external_id": external_id,
+      "delay_seconds": round(delay_seconds, 1),
+    })
+
+  # --- Worker utilization ---
+
+  def worker_utilization(
+    self,
+    website_name: str,
+    idle_seconds: float,
+    active_seconds: float,
+    fetch_queue: int = 0,
+    watch_queue: int = 0,
+    search_queue: int = 0,
+  ) -> None:
+    self._emit("worker_utilization", website_name, {
+      "idle_seconds": round(idle_seconds, 1),
+      "active_seconds": round(active_seconds, 1),
+      "fetch_queue": int(fetch_queue),
+      "watch_queue": int(watch_queue),
+      "search_queue": int(search_queue),
+    })
 
   # --- Errors ---
 
@@ -157,11 +186,10 @@ class MetricsCollector:
 class LiveStatus:
   """In-memory snapshot of current pipeline activity.
 
-  All three loops (search, fetch, watch) run in the same asyncio
-  event loop so no locks are required.  A background task created by
-  ``start()`` atomically writes the snapshot to *status_path* every
-  second.  The web frontend reads this file to paint live progress
-  bars.
+  The pipeline runs one async worker per website.  Each worker
+  reports its current activity via ``worker_activity()`` /
+  ``worker_idle()``, and the snapshot is flushed to disk at ~1 Hz
+  so the web frontend can poll it.
   """
 
   def __init__(self, status_path: Path) -> None:
@@ -169,10 +197,8 @@ class LiveStatus:
     self._started_at = time.time()
     self._task: asyncio.Task | None = None
 
-    # Per-loop state dicts — mutated directly by the loops.
-    self._search: dict = self._idle_state()
-    self._fetch: dict = self._idle_state()
-    self._watch: dict = self._idle_state()
+    # Per-worker state: { worker_name: { "state": ..., ... } }
+    self._workers: dict[str, dict] = {}
 
     # Cumulative session counters (survive across loop iterations).
     self._counters: dict = {
@@ -189,10 +215,6 @@ class LiveStatus:
       "errors": 0,
     }
 
-  @staticmethod
-  def _idle_state() -> dict:
-    return {"state": "idle"}
-
   # --- Serialization & flush ---
 
   def to_dict(self) -> dict:
@@ -201,9 +223,9 @@ class LiveStatus:
       "started_at": self._started_at,
       "uptime_seconds": round(time.time() - self._started_at, 1),
       "updated_at": time.time(),
-      "search_loop": dict(self._search),
-      "fetch_loop": dict(self._fetch),
-      "watch_loop": dict(self._watch),
+      "workers": {
+        name: dict(state) for name, state in self._workers.items()
+      },
       "counters": dict(self._counters),
     }
 
@@ -246,108 +268,48 @@ class LiveStatus:
     with contextlib.suppress(OSError):
       self._path.unlink(missing_ok=True)
 
-  # --- Search loop updates ---
+  # --- Per-worker updates ---
 
-  def search_started(
+  def worker_activity(
     self,
-    total_queries: int,
-    total_websites: int,
+    worker_name: str,
+    task_type: str,
+    detail: str = "",
+    watch_queue: int = 0,
+    fetch_queue: int = 0,
+    search_queue: int = 0,
   ) -> None:
-    self._search = {
+    """Report that a worker is currently executing a task."""
+    self._workers[worker_name] = {
       "state": "running",
-      "query_index": 0,
-      "query_total": total_queries,
-      "query_text": "",
-      "website_index": 0,
-      "website_total": total_websites,
-      "website_name": "",
+      "task": task_type,
+      "detail": detail,
+      "watch_queue": watch_queue,
+      "fetch_queue": fetch_queue,
+      "search_queue": search_queue,
     }
 
-  def search_progress(
+  def worker_idle(
     self,
-    query_index: int,
-    query_text: str,
-    website_index: int,
-    website_name: str,
+    worker_name: str,
+    watch_queue: int = 0,
+    fetch_queue: int = 0,
+    search_queue: int = 0,
+    next_event_in: float | None = None,
+    next_event_kind: str | None = None,
   ) -> None:
-    self._search.update({
-      "state": "running",
-      "query_index": query_index,
-      "query_text": query_text,
-      "website_index": website_index,
-      "website_name": website_name,
-    })
-
-  def search_idle(self) -> None:
-    self._search = self._idle_state()
-
-  def search_sleeping(self, resume_in_seconds: float) -> None:
-    self._search = {"state": "sleeping", "resume_in_seconds": round(resume_in_seconds)}
-
-  # --- Fetch loop updates ---
-
-  def fetch_started(self, batch_total: int) -> None:
-    self._fetch = {
-      "state": "running",
-      "batch_index": 0,
-      "batch_total": batch_total,
-      "current_listing": "",
-      "current_website": "",
+    """Report that a worker is idle / sleeping."""
+    state: dict = {
+      "state": "idle",
+      "watch_queue": watch_queue,
+      "fetch_queue": fetch_queue,
+      "search_queue": search_queue,
     }
-
-  def fetch_progress(
-    self,
-    batch_index: int,
-    listing_id: str,
-    website_name: str,
-  ) -> None:
-    self._fetch.update({
-      "state": "running",
-      "batch_index": batch_index,
-      "current_listing": listing_id,
-      "current_website": website_name,
-    })
-
-  def fetch_idle(self) -> None:
-    self._fetch = self._idle_state()
-
-  def fetch_sleeping(self) -> None:
-    self._fetch = {"state": "sleeping"}
-
-  # --- Watch loop updates ---
-
-  def watch_started(self, due_count: int, queue_size: int) -> None:
-    self._watch = {
-      "state": "running",
-      "check_index": 0,
-      "check_total": due_count,
-      "queue_size": queue_size,
-      "current_listing": "",
-      "current_website": "",
-    }
-
-  def watch_progress(
-    self,
-    check_index: int,
-    listing_id: str,
-    website_name: str,
-  ) -> None:
-    self._watch.update({
-      "state": "running",
-      "check_index": check_index,
-      "current_listing": listing_id,
-      "current_website": website_name,
-    })
-
-  def watch_idle(self, queue_size: int) -> None:
-    self._watch = {"state": "idle", "queue_size": queue_size}
-
-  def watch_sleeping(self, queue_size: int, next_check_in: float) -> None:
-    self._watch = {
-      "state": "sleeping",
-      "queue_size": queue_size,
-      "next_check_in": round(next_check_in),
-    }
+    if next_event_in is not None:
+      state["next_event_in"] = round(next_event_in)
+    if next_event_kind:
+      state["next_event_kind"] = next_event_kind
+    self._workers[worker_name] = state
 
   # --- Counter increments (called alongside MetricsCollector) ---
 
