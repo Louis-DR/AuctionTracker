@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -59,11 +60,12 @@ class DiscoveryLoop:
     repository: Repository,
     metrics=None,
     live=None,
+    converter=None,
   ) -> None:
     self._config = config
     self._router = router
     self._repo = repository
-    self._ingest = Ingest(repository)
+    self._ingest = Ingest(repository, converter=converter)
     self._metrics = metrics
     self._live = live
     # listing_id -> consecutive fetch-error count (reset on success).
@@ -143,8 +145,7 @@ class DiscoveryLoop:
           if self._live:
             self._live.increment("errors")
 
-      from datetime import datetime
-      search_query.last_run_at = datetime.utcnow()
+      search_query.last_run_at = datetime.now(UTC).replace(tzinfo=None)
       search_query.result_count = total_results
       session.commit()
 

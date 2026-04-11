@@ -3,16 +3,22 @@
 This module bridges the parser output (Pydantic models) and the
 database layer (SQLAlchemy models). It handles the mapping, dedup,
 and update logic so that the orchestrator loops stay clean.
+
+When a :class:`CurrencyConverter` is provided, every price is
+automatically converted to EUR at the exchange rate of the moment,
+populating the ``*_eur`` columns on listings, bids, and snapshots.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from auction_tracker.currency import CurrencyConverter
 from auction_tracker.database.models import (
   ItemCondition,
   Listing,
@@ -61,8 +67,23 @@ def _safe_enum(mapping: dict, value: str | None, default):
 class Ingest:
   """Converts scraped data into database records."""
 
-  def __init__(self, repository: Repository) -> None:
+  def __init__(
+    self,
+    repository: Repository,
+    converter: CurrencyConverter | None = None,
+  ) -> None:
     self._repo = repository
+    self._converter = converter
+
+  def _to_eur(
+    self,
+    amount: Decimal | float | None,
+    currency: str,
+  ) -> tuple[Decimal | None, float | None]:
+    """Convert *amount* to EUR.  Returns ``(eur_amount, rate)``."""
+    if amount is None or self._converter is None:
+      return None, None
+    return self._converter.to_eur(amount, currency)
 
   def ingest_search_result(
     self,
@@ -80,6 +101,8 @@ class Ingest:
 
     Returns (listing, is_new).
     """
+    current_eur, _rate = self._to_eur(result.current_price, result.currency)
+
     kwargs = {
       "current_price": result.current_price,
       "currency": result.currency,
@@ -87,6 +110,8 @@ class Ingest:
       "bid_count": result.bid_count or 0,
       "is_fully_fetched": False,
     }
+    if current_eur is not None:
+      kwargs["current_price_eur"] = current_eur
     if result.listing_type:
       kwargs["listing_type"] = _safe_enum(
         _LISTING_TYPE_MAP, result.listing_type, ListingType.AUCTION,
@@ -138,6 +163,9 @@ class Ingest:
     This is the primary ingest path — it updates all fields and
     marks the listing as fully fetched.
     """
+    current_eur, current_rate = self._to_eur(scraped.current_price, scraped.currency)
+    final_eur, _final_rate = self._to_eur(scraped.final_price, scraped.currency)
+
     kwargs = {
       "description": scraped.description,
       "listing_type": _safe_enum(
@@ -169,8 +197,12 @@ class Ingest:
       "sale_name": scraped.sale_name,
       "sale_date": scraped.sale_date,
       "is_fully_fetched": True,
-      "last_checked_at": datetime.utcnow(),
+      "last_checked_at": datetime.now(UTC).replace(tzinfo=None),
     }
+    if current_eur is not None:
+      kwargs["current_price_eur"] = current_eur
+    if final_eur is not None:
+      kwargs["final_price_eur"] = final_eur
     if scraped.status:
       kwargs["status"] = _safe_enum(
         _LISTING_STATUS_MAP, scraped.status, ListingStatus.UNKNOWN,
@@ -209,23 +241,26 @@ class Ingest:
         listing_id=listing.id,
         price=float(scraped.current_price),
         currency=scraped.currency,
+        price_eur=float(current_eur) if current_eur is not None else None,
+        exchange_rate=current_rate,
         bid_count=scraped.bid_count,
         watcher_count=scraped.watcher_count,
         view_count=scraped.view_count,
       )
 
     if scraped.bids:
-      bid_dicts = [
-        {
+      bid_dicts = []
+      for bid in scraped.bids:
+        bid_eur, _bid_rate = self._to_eur(bid.amount, bid.currency)
+        bid_dicts.append({
           "amount": bid.amount,
           "currency": bid.currency,
+          "amount_eur": bid_eur,
           "bid_time": bid.bid_time,
           "bidder_username": bid.bidder_username,
           "bidder_country": bid.bidder_country,
           "is_automatic": bid.is_automatic,
-        }
-        for bid in scraped.bids
-      ]
+        })
       # Mark the highest bid as winning if the listing is sold.
       if scraped.status == "sold" and bid_dicts:
         bid_dicts[-1]["is_winning"] = True

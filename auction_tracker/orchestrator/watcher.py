@@ -73,6 +73,7 @@ class Watcher:
     repository: Repository,
     metrics=None,
     live=None,
+    converter=None,
   ) -> None:
     self._config = config
     self._database = database
@@ -80,7 +81,7 @@ class Watcher:
     self._repo = repository
     self._metrics = metrics
     self._live = live
-    self._ingest = Ingest(repository)
+    self._ingest = Ingest(repository, converter=converter)
     self._scheduler = Scheduler(config.scheduler)
     self._queue = CheckQueue()
 
@@ -295,7 +296,7 @@ class Watcher:
       tracked.post_end_checks += 1
       time_since_end = time.time() - tracked.end_time
 
-      max_wait = self._get_ending_max_wait(tracked.strategy)
+      max_wait = self._scheduler.ending_max_wait(tracked.strategy)
       if time_since_end > max_wait:
         logger.warning(
           "Listing %s [%s] stuck in ENDING for %.0fs, marking as UNSOLD",
@@ -307,15 +308,6 @@ class Watcher:
             session, tracked.listing_id, ListingStatus.UNSOLD,
           )
           session.commit()
-
-  def _get_ending_max_wait(self, strategy: MonitoringStrategy) -> float:
-    if strategy == MonitoringStrategy.FULL:
-      return self._config.scheduler.full.ending_max_wait
-    elif strategy == MonitoringStrategy.SNAPSHOT:
-      return self._config.scheduler.snapshot.ending_max_wait
-    elif strategy == MonitoringStrategy.POST_AUCTION:
-      return self._config.scheduler.post_auction.max_wait
-    return 3600.0
 
   async def run_forever(self, stop_event: asyncio.Event | None = None) -> None:
     """Run the watch loop continuously until stopped.
