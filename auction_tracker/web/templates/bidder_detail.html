@@ -62,7 +62,7 @@
         <td>{{ listing.title[:80] }}{% if listing.title|length > 80 %}&hellip;{% endif %}</td>
         <td class="text-right no-wrap">
           {% if listing.final_price_eur is not none %}
-            {{ listing.final_price_eur|format_price("EUR") }}
+            {{ listing.final_price_eur|format_price(display_currency) }}
           {% elif listing.final_price is not none %}
             {{ listing.final_price|format_price(listing.currency) }}
           {% else %}
@@ -98,7 +98,7 @@
         <td class="text-right no-wrap"><strong>{{ bid.amount|format_price(bid.currency) }}</strong></td>
         <td class="text-right no-wrap">
           {% if bid.amount_eur is not none %}
-            {{ bid.amount_eur|format_price("EUR") }}
+            {{ bid.amount_eur|format_price(display_currency) }}
           {% else %}
             &ndash;
           {% endif %}
@@ -172,7 +172,7 @@
         },
         y: {
           beginAtZero: true,
-          title: { display: true, text: "EUR" },
+          title: { display: true, text: "{{ display_currency }}" },
           ticks: {
             callback: function(value) {
               return value.toLocaleString();

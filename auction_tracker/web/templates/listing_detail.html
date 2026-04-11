@@ -121,10 +121,10 @@ opacity: 0.8;
     {% set display_price = listing.final_price or listing.current_price %}
     {% if display_price is not none %}
     <p class="price-big">{{ display_price|format_price(listing.currency) }}</p>
-    {% if listing.currency != "EUR" %}
+    {% if listing.currency != display_currency %}
     {% set eur_price = listing.final_price_eur or listing.current_price_eur %}
     {% if eur_price is not none %}
-    <p class="price-eur">&asymp;&nbsp;{{ eur_price|format_price("EUR") }}</p>
+    <p class="price-eur">&asymp;&nbsp;{{ eur_price|format_price(display_currency) }}</p>
     {% endif %}
     {% endif %}
     {% if listing.final_price is not none %}
@@ -392,7 +392,7 @@ opacity: 0.8;
           <th>Country</th>
           <th>Time</th>
           <th class="text-right">Amount</th>
-          {% if listing.currency != "EUR" %}<th class="text-right">EUR</th>{% endif %}
+          {% if listing.currency != display_currency %}<th class="text-right">{{ display_currency }}</th>{% endif %}
           <th>Type</th>
         </tr>
       </thead>
@@ -411,8 +411,8 @@ opacity: 0.8;
             %}–{% endif %}</td>
           <td class="no-wrap">{{ bid.bid_time|format_datetime }}</td>
           <td class="text-right"><strong>{{ bid.amount|format_price(bid.currency) }}</strong></td>
-          {% if listing.currency != "EUR" %}
-          <td class="text-right eur-hint">{% if bid.amount_eur is not none %}{{ bid.amount_eur|format_price("EUR") }}{%
+          {% if listing.currency != display_currency %}
+          <td class="text-right eur-hint">{% if bid.amount_eur is not none %}{{ bid.amount_eur|format_price(display_currency) }}{%
             else %}–{% endif %}</td>
           {% endif %}
           <td>{% if bid.is_automatic %}<span class="autobid-badge">auto</span>{% else %}manual{% endif %}</td>
@@ -640,10 +640,10 @@ opacity: 0.8;
             },
             label: function (context) {
               var line = context.parsed.y.toLocaleString() + " {{ listing.currency }}";
-              {% if listing.currency != "EUR" %}
+              {% if listing.currency != display_currency %}
               var idx = context.dataIndex;
               if (data[idx].amount_eur) {
-                line += "  (≈ " + data[idx].amount_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " EUR)";
+                line += "  (≈ " + data[idx].amount_eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " {{ display_currency }})";
               }
               {% endif %}
               return line;
@@ -727,12 +727,12 @@ opacity: 0.8;
       plugins: {
         tooltip: {
           callbacks: {
-              {% if listing.currency != "EUR" %}
+              {% if listing.currency != display_currency %}
   afterBody: function(tooltipItems) {
     var idx = tooltipItems[0].dataIndex;
     var eur = data[idx].price_eur;
     if (eur) {
-      return "≈ " + eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " EUR";
+      return "≈ " + eur.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " {{ display_currency }}";
     }
     return "";
   }

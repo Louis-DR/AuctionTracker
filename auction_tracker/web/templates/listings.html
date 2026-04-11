@@ -229,11 +229,11 @@
     <input type="date" id="chart-date-to" style="margin-bottom: 0;">
   </div>
   <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-    <label for="chart-price-min" style="font-size: 0.85em; font-weight: 600;">Min Price (EUR)</label>
+    <label for="chart-price-min" style="font-size: 0.85em; font-weight: 600;">Min Price ({{ display_currency }})</label>
     <input type="number" id="chart-price-min" step="0.01" min="0" placeholder="Min" style="margin-bottom: 0;">
   </div>
   <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-    <label for="chart-price-max" style="font-size: 0.85em; font-weight: 600;">Max Price (EUR)</label>
+    <label for="chart-price-max" style="font-size: 0.85em; font-weight: 600;">Max Price ({{ display_currency }})</label>
     <input type="number" id="chart-price-max" step="0.01" min="0" placeholder="Max" style="margin-bottom: 0;">
   </div>
   <div style="display: flex; flex-direction: column; gap: 0.5rem; justify-content: flex-end;">
@@ -314,13 +314,13 @@
         <td class="text-right no-wrap">
           {% if listing.final_price is not none %}
             {{ listing.final_price|format_price(listing.currency) }}
-            {% if listing.currency != "EUR" and listing.final_price_eur is not none %}
-              <br><span class="eur-hint">&asymp;&nbsp;{{ listing.final_price_eur|format_price("EUR") }}</span>
+            {% if listing.currency != display_currency and listing.final_price_eur is not none %}
+              <br><span class="eur-hint">&asymp;&nbsp;{{ listing.final_price_eur|format_price(display_currency) }}</span>
             {% endif %}
           {% elif listing.current_price is not none %}
             {{ listing.current_price|format_price(listing.currency) }}
-            {% if listing.currency != "EUR" and listing.current_price_eur is not none %}
-              <br><span class="eur-hint">&asymp;&nbsp;{{ listing.current_price_eur|format_price("EUR") }}</span>
+            {% if listing.currency != display_currency and listing.current_price_eur is not none %}
+              <br><span class="eur-hint">&asymp;&nbsp;{{ listing.current_price_eur|format_price(display_currency) }}</span>
             {% endif %}
           {% else %}
             &ndash;
@@ -420,6 +420,7 @@
 <script>
   (function() {
     var priceHistoryData = {{ price_history_data|tojson_safe }};
+    var chartDefaults = {{ chart_defaults|tojson_safe }};
     var context = document.getElementById("price-history-chart").getContext("2d");
     var chartInstance = null;
 
@@ -474,11 +475,20 @@
       return year + "-" + month + "-" + day;
     }
 
-    // Set default values.
-    dateFromInput.value = formatDateForInput(minDate);
-    dateToInput.value = formatDateForInput(maxDate);
+    // Apply config defaults; fall back to data min/max when absent.
+    var defaultDateFrom = chartDefaults.time_start
+      ? chartDefaults.time_start
+      : formatDateForInput(minDate);
+    var defaultDateTo = formatDateForInput(maxDate);
+    var defaultPriceMin = chartDefaults.price_min;
+    var defaultPriceMax = chartDefaults.price_max;
+
+    dateFromInput.value = defaultDateFrom;
+    dateToInput.value = defaultDateTo;
     priceMinInput.placeholder = minPrice.toFixed(2);
     priceMaxInput.placeholder = maxPrice.toFixed(2);
+    if (defaultPriceMin != null) priceMinInput.value = defaultPriceMin;
+    if (defaultPriceMax != null) priceMaxInput.value = defaultPriceMax;
 
     // Filter data based on current filter values.
     function filterData() {
@@ -729,7 +739,7 @@
             beginAtZero: false,
             title: {
               display: true,
-              text: "Total Buyer Cost (EUR)",
+              text: "Total Buyer Cost ({{ display_currency }})",
             },
             ticks: {
               callback: function(value) {
@@ -759,12 +769,12 @@
     priceMinInput.addEventListener("input", updateChart);
     priceMaxInput.addEventListener("input", updateChart);
 
-    // Reset button handler.
+    // Reset button handler: restore config defaults (not data extremes).
     resetButton.addEventListener("click", function() {
-      dateFromInput.value = formatDateForInput(minDate);
-      dateToInput.value = formatDateForInput(maxDate);
-      priceMinInput.value = "";
-      priceMaxInput.value = "";
+      dateFromInput.value = defaultDateFrom;
+      dateToInput.value = defaultDateTo;
+      priceMinInput.value = defaultPriceMin != null ? defaultPriceMin : "";
+      priceMaxInput.value = defaultPriceMax != null ? defaultPriceMax : "";
       updateChart();
     });
 
@@ -938,7 +948,7 @@
               x: {
                 title: {
                   display: true,
-                  text: "Price Range (EUR)",
+                  text: "Price Range ({{ display_currency }})",
                 },
                 ticks: {
                   maxRotation: 45,

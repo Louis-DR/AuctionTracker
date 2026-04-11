@@ -29,12 +29,6 @@
       {{ status_counts.get(ListingStatus.UNSOLD, 0) }}
     </p>
   </article>
-  <article>
-    <p class="stat-label">Rejected</p>
-    <p class="stat-number" style="color: #aaaaaa;">
-      {{ rejected_count }}
-    </p>
-  </article>
 </div>
 
 <!-- Price and website statistics -->
@@ -44,9 +38,9 @@
     {% if price_avg is not none %}
     <table>
       <tbody>
-        <tr><td>Average</td><td class="text-right">{{ price_avg|format_price("EUR") }}</td></tr>
-        <tr><td>Minimum</td><td class="text-right">{{ price_min|format_price("EUR") }}</td></tr>
-        <tr><td>Maximum</td><td class="text-right">{{ price_max|format_price("EUR") }}</td></tr>
+        <tr><td>Average</td><td class="text-right">{{ price_avg|format_price(display_currency) }}</td></tr>
+        <tr><td>Minimum</td><td class="text-right">{{ price_min|format_price(display_currency) }}</td></tr>
+        <tr><td>Maximum</td><td class="text-right">{{ price_max|format_price(display_currency) }}</td></tr>
       </tbody>
     </table>
     {% else %}
@@ -59,9 +53,9 @@
     {% if sold_price_avg is not none %}
     <table>
       <tbody>
-        <tr><td>Average</td><td class="text-right">{{ sold_price_avg|format_price("EUR") }}</td></tr>
-        <tr><td>Minimum</td><td class="text-right">{{ sold_price_min|format_price("EUR") }}</td></tr>
-        <tr><td>Maximum</td><td class="text-right">{{ sold_price_max|format_price("EUR") }}</td></tr>
+        <tr><td>Average</td><td class="text-right">{{ sold_price_avg|format_price(display_currency) }}</td></tr>
+        <tr><td>Minimum</td><td class="text-right">{{ sold_price_min|format_price(display_currency) }}</td></tr>
+        <tr><td>Maximum</td><td class="text-right">{{ sold_price_max|format_price(display_currency) }}</td></tr>
       </tbody>
     </table>
     {% else %}
