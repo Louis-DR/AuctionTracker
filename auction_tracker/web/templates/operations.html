@@ -844,15 +844,25 @@ const activityChart = new Chart(document.getElementById('activityChart'), {
   options: lineOpts(''),
 });
 
-// -- Requests per website (horizontal bar) --
-const websiteLabels0 = Object.keys(initialWebsiteData).sort();
+// -- Requests per website (line time series, one line per website) --
+function buildRequestsByWebsiteDatasets(byWebsite) {
+  return Object.entries(byWebsite).map(([website, values]) => ({
+    label: website,
+    data: values,
+    borderColor: getWebsiteColor(website),
+    backgroundColor: 'transparent',
+    tension: 0.3,
+    pointRadius: 2,
+    spanGaps: true,
+  }));
+}
 const requestsChart = new Chart(document.getElementById('requestsChart'), {
-  type: 'bar',
+  type: 'line',
   data: {
-    labels: websiteLabels0,
-    datasets: [{ label: 'Requests', data: websiteLabels0.map(k => initialWebsiteData[k]), backgroundColor: websiteLabels0.map(k => getWebsiteColor(k)), borderRadius: 4 }],
+    labels: initialShortLabels,
+    datasets: buildRequestsByWebsiteDatasets(initialTimeseries.requests_by_website || {}),
   },
-  options: { ...barOpts(false), indexAxis: 'y' },
+  options: lineOpts('Requests'),
 });
 
 // -- Requests by type (horizontal bar, mirrors "per website") --
@@ -1622,12 +1632,9 @@ function updateCharts(data) {
   activityChart.data.datasets[2].data = ts.requests     || [];
   activityChart.update('none');
 
-  // Requests per website
-  const wData = data.website_request_counts || {};
-  const wLabels = Object.keys(wData).sort();
-  requestsChart.data.labels = wLabels;
-  requestsChart.data.datasets[0].data = wLabels.map(k => wData[k]);
-  requestsChart.data.datasets[0].backgroundColor = wLabels.map(k => getWebsiteColor(k));
+  // Requests per website (time series)
+  requestsChart.data.labels = shortLabels;
+  requestsChart.data.datasets = buildRequestsByWebsiteDatasets(ts.requests_by_website || {});
   requestsChart.update('none');
 
   // Requests by type

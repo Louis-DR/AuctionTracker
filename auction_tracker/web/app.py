@@ -1224,6 +1224,8 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       hourly_requests_by_type: dict[str, dict[str, int]] = {
         label: {} for label in request_type_map.values()
       }
+      # {website: {bucket: count}} for requests-by-website line chart.
+      hourly_requests_by_website: dict[str, dict[str, int]] = {}
       # {website: {bucket: count}} for stacked error-by-website bar.
       hourly_errors_by_website: dict[str, dict[str, int]] = {}
       # {source: {bucket: count}} for stacked error-by-source bar.
@@ -1320,6 +1322,13 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           hourly_requests_by_type[type_label][bucket] = (
             hourly_requests_by_type[type_label].get(bucket, 0) + 1
           )
+          if event.website_name:
+            website = event.website_name
+            if website not in hourly_requests_by_website:
+              hourly_requests_by_website[website] = {}
+            hourly_requests_by_website[website][bucket] = (
+              hourly_requests_by_website[website].get(bucket, 0) + 1
+            )
 
       hourly_sold: dict[str, int] = {}
       hourly_unsold: dict[str, int] = {}
@@ -1398,6 +1407,10 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         "requests_by_type": {
           label: _ts(buckets)
           for label, buckets in hourly_requests_by_type.items()
+        },
+        "requests_by_website": {
+          website: _ts(buckets)
+          for website, buckets in hourly_requests_by_website.items()
         },
         "errors_by_website": {
           website: _ts(buckets)
