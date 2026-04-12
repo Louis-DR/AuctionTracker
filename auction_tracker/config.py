@@ -270,6 +270,12 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
     request_delay=3.0,
   ),
+  "kleinanzeigen": WebsiteConfig(
+    transport=TransportKind.HTTP,
+    fallback_transport=TransportKind.BROWSER,
+    monitoring_strategy=MonitoringStrategy.SNAPSHOT,
+    request_delay=3.0,
+  ),
 }
 
 

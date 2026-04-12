@@ -95,6 +95,7 @@ def seed_websites(app: AppContext) -> None:
     "gazette_drouot": "https://www.gazette-drouot.com",
     "vinted": "https://www.vinted.fr",
     "todocoleccion": "https://www.todocoleccion.net",
+    "kleinanzeigen": "https://www.kleinanzeigen.de",
   }
 
   with app.database.session() as session:

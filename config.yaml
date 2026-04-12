@@ -133,3 +133,9 @@ websites:
     fallback_transport: browser
     monitoring_strategy: snapshot
     request_delay: 3s
+  kleinanzeigen:
+    enabled: true
+    transport: http
+    fallback_transport: browser
+    monitoring_strategy: snapshot
+    request_delay: 3s
