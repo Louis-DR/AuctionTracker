@@ -1,0 +1,76 @@
+{
+  "item": {
+    "id": 4812937650,
+    "title": "Stylo plume Montblanc Meisterstück 149",
+    "description": "Stylo plume Montblanc Meisterstück 149 en résine noire avec attributs plaqués or. Plume en or 18 carats, taille M. Très bon état, utilisé quelques fois seulement. Livré avec sa boîte d'origine.",
+    "brand_title": "Montblanc",
+    "brand_dto": {
+      "id": 4523,
+      "title": "Montblanc",
+      "slug": "montblanc"
+    },
+    "size_title": "",
+    "status_id": 3,
+    "is_closed": false,
+    "can_buy": true,
+    "favourite_count": 12,
+    "view_count": 87,
+    "url": "/items/4812937650-stylo-plume-montblanc-meisterstuck-149",
+    "price": {
+      "amount": "285.00",
+      "currency_code": "EUR"
+    },
+    "total_item_price": {
+      "amount": "291.45",
+      "currency_code": "EUR"
+    },
+    "currency": "EUR",
+    "color1": "Noir",
+    "color2": "",
+    "catalog_id": 1927,
+    "material": null,
+    "photos": [
+      {
+        "id": 98765432,
+        "url": "https://images1.vinted.net/t/03_00e25_abc123/f800/1712345678.jpeg",
+        "full_size_url": "https://images1.vinted.net/t/03_00e25_abc123/f1600/1712345678.jpeg",
+        "high_resolution": {
+          "id": "03_00e25_abc123",
+          "timestamp": 1712345678
+        }
+      },
+      {
+        "id": 98765433,
+        "url": "https://images1.vinted.net/t/03_00e25_abc124/f800/1712345679.jpeg",
+        "full_size_url": "https://images1.vinted.net/t/03_00e25_abc124/f1600/1712345679.jpeg",
+        "high_resolution": {
+          "id": "03_00e25_abc124",
+          "timestamp": 1712345679
+        }
+      }
+    ],
+    "user": {
+      "id": 55512340,
+      "login": "pen_collector_75",
+      "country_iso_code": "FR",
+      "feedback_reputation": 4.8,
+      "feedback_count": 47,
+      "profile_url": "https://www.vinted.fr/member/55512340-pen-collector-75"
+    },
+    "plugins": [
+      {
+        "name": "attributes",
+        "data": {
+          "attributes": [
+            {
+              "code": "material",
+              "data": {
+                "value": "Résine"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

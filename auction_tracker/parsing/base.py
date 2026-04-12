@@ -174,6 +174,16 @@ class Parser(abc.ABC):
       f"{self.website_name} parser does not implement build_search_url"
     )
 
+  def build_fetch_url(self, url: str) -> str:
+    """Transform a listing's stored URL into the URL to actually fetch.
+
+    Most sites use the same URL for display and fetch.  Override for
+    sites where the internal API URL differs from the public URL
+    (e.g. Vinted, where the public ``/items/123-slug`` must be
+    rewritten to ``/api/v2/items/123/details``).
+    """
+    return url
+
   def extract_external_id(self, url: str) -> str | None:
     """Extract the website's listing ID from a listing URL.
 

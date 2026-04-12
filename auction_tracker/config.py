@@ -257,6 +257,13 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     historical_only=True,
     exclude_from_discovery=True,
   ),
+  "vinted": WebsiteConfig(
+    transport=TransportKind.HTTP,
+    monitoring_strategy=MonitoringStrategy.SNAPSHOT,
+    request_delay=3.0,
+    preferred_domain="vinted.fr",
+    http_warm_up=True,
+  ),
 }
 
 

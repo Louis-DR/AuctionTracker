@@ -1,0 +1,53 @@
+{
+  "item": {
+    "id": 3901827364,
+    "title": "Pelikan Souverän M800 - Plume F",
+    "description": "Pelikan Souverän M800 avec plume fine en or 18 carats. Rayures vertes et noires. Bon état général avec légères traces d'utilisation.",
+    "brand_title": "Pelikan",
+    "brand_dto": {
+      "id": 9821,
+      "title": "Pelikan",
+      "slug": "pelikan"
+    },
+    "size_title": "",
+    "status_id": 3,
+    "is_closed": true,
+    "can_buy": false,
+    "favourite_count": 23,
+    "view_count": 145,
+    "url": "/items/3901827364-pelikan-souveran-m800-plume-f",
+    "price": {
+      "amount": "195.00",
+      "currency_code": "EUR"
+    },
+    "total_item_price": {
+      "amount": "201.90",
+      "currency_code": "EUR"
+    },
+    "currency": "EUR",
+    "color1": "Vert",
+    "color2": "Noir",
+    "catalog_id": 1927,
+    "material": null,
+    "photos": [
+      {
+        "id": 44556677,
+        "url": "https://images1.vinted.net/t/02_00d14_xyz987/f800/1711200000.jpeg",
+        "full_size_url": "https://images1.vinted.net/t/02_00d14_xyz987/f1600/1711200000.jpeg",
+        "high_resolution": {
+          "id": "02_00d14_xyz987",
+          "timestamp": 1711200000
+        }
+      }
+    ],
+    "user": {
+      "id": 33344556,
+      "login": "stylos_vintage",
+      "country_iso_code": "DE",
+      "feedback_reputation": 5.0,
+      "feedback_count": 112,
+      "profile_url": "https://www.vinted.de/member/33344556-stylos-vintage"
+    },
+    "plugins": []
+  }
+}

@@ -38,7 +38,8 @@ async def fetch_and_parse_listing(
 
   for attempt_url in [url]:
     try:
-      result = await router.fetch(website_name, attempt_url)
+      fetch_url = parser.build_fetch_url(attempt_url)
+      result = await router.fetch(website_name, fetch_url)
       scraped = parser.parse_listing(result.html, url=attempt_url)
       if attempt_url != url:
         logger.info(

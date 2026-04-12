@@ -69,12 +69,12 @@ websites:
   ebay:
     enabled: true
     transport: http
-    request_delay: 3s        # Min pause between two eBay requests
+    request_delay: 2s        # Min pause between two eBay requests
     monitoring_strategy: snapshot
     preferred_domain: ebay.fr
     http_warm_up: true       # Visit homepage first to get session cookies
   leboncoin:
-    enabled: true
+    enabled: false
     transport: camoufox      # Camoufox (Firefox fork with C++ fingerprint masking)
     fallback_transport: browser  # rebrowser-playwright Chromium as fallback
     monitoring_strategy: snapshot
@@ -120,3 +120,10 @@ websites:
     fallback_transport: browser
     monitoring_strategy: snapshot
     request_delay: 2s
+  vinted:
+    enabled: true
+    transport: http
+    monitoring_strategy: snapshot
+    request_delay: 3s
+    preferred_domain: vinted.fr
+    http_warm_up: true

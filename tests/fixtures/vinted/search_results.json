@@ -1,0 +1,109 @@
+{
+  "items": [
+    {
+      "id": 4812937650,
+      "title": "Stylo plume Montblanc Meisterstück 149",
+      "brand_title": "Montblanc",
+      "size_title": "",
+      "status_id": 3,
+      "favourite_count": 12,
+      "view_count": 87,
+      "url": "/items/4812937650-stylo-plume-montblanc-meisterstuck-149",
+      "price": {
+        "amount": "285.00",
+        "currency_code": "EUR"
+      },
+      "total_item_price": {
+        "amount": "291.45",
+        "currency_code": "EUR"
+      },
+      "photo": {
+        "id": 98765432,
+        "url": "https://images1.vinted.net/t/03_00e25_abc123/f800/1712345678.jpeg",
+        "high_resolution": {
+          "id": "03_00e25_abc123",
+          "timestamp": 1712345678
+        }
+      },
+      "user": {
+        "id": 55512340,
+        "login": "pen_collector_75",
+        "profile_url": "https://www.vinted.fr/member/55512340-pen-collector-75"
+      }
+    },
+    {
+      "id": 5123456789,
+      "title": "Parker Duofold Centennial",
+      "brand_title": "Parker",
+      "size_title": "",
+      "status_id": 2,
+      "favourite_count": 5,
+      "view_count": 34,
+      "url": "/items/5123456789-parker-duofold-centennial",
+      "price": {
+        "amount": "120.00",
+        "currency_code": "EUR"
+      },
+      "total_item_price": {
+        "amount": "126.50",
+        "currency_code": "EUR"
+      },
+      "photo": {
+        "id": 11223344,
+        "url": "https://images1.vinted.net/t/04_00f36_def456/f800/1712400000.jpeg",
+        "high_resolution": {
+          "id": "04_00f36_def456",
+          "timestamp": 1712400000
+        }
+      },
+      "user": {
+        "id": 77789012,
+        "login": "vintage_pens_fr",
+        "profile_url": "https://www.vinted.fr/member/77789012-vintage-pens-fr"
+      }
+    },
+    {
+      "id": 6234567890,
+      "title": "Lot de 3 stylos plume Lamy Safari",
+      "brand_title": "Lamy",
+      "size_title": "",
+      "status_id": 6,
+      "favourite_count": 0,
+      "view_count": 2,
+      "url": "/items/6234567890-lot-de-3-stylos-plume-lamy-safari",
+      "price": {
+        "amount": "45.00",
+        "currency_code": "EUR"
+      },
+      "total_item_price": {
+        "amount": "49.95",
+        "currency_code": "EUR"
+      },
+      "photo": {
+        "id": 55667788,
+        "url": "https://images1.vinted.net/t/05_00g47_ghi789/f800/1712500000.jpeg",
+        "high_resolution": {
+          "id": "05_00g47_ghi789",
+          "timestamp": 1712500000
+        }
+      },
+      "user": {
+        "id": 99901234,
+        "login": "marie_papeterie",
+        "profile_url": "https://www.vinted.fr/member/99901234-marie-papeterie"
+      }
+    }
+  ],
+  "dominant_brand": null,
+  "search_tracking_params": {
+    "search_id": "abc123def456",
+    "search_session_id": "session_789"
+  },
+  "pagination": {
+    "current_page": 1,
+    "total_pages": 6,
+    "total_entries": 523,
+    "per_page": 96,
+    "time": 1712500100
+  }
+}
