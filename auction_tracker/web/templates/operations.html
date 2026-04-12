@@ -524,13 +524,35 @@
       </div>
     </div>
     <div class="chart-tab-panel" id="panel-search-status-bar">
-      <div class="chart-container" style="overflow-y: auto; max-height: 220px;">
-        <canvas id="searchStatusBarChart"></canvas>
+      <div class="chart-container category-chart-viewport">
+        <div class="category-chart-row">
+          <div class="category-chart-plot">
+            <div class="category-chart-canvas-host">
+              <canvas id="searchStatusBarChart"></canvas>
+            </div>
+          </div>
+          <div class="category-vscroll-wrap">
+            <input type="range" id="searchStatusBarScrollRange" class="category-vscroll-range"
+                   orient="vertical" min="0" max="0" value="0" step="1"
+                   aria-label="Scroll status list" style="display: none;" />
+          </div>
+        </div>
       </div>
     </div>
     <div class="chart-tab-panel" id="panel-search-rejection">
-      <div class="chart-container" style="overflow-y: auto; max-height: 220px;">
-        <canvas id="searchRejectionChart"></canvas>
+      <div class="chart-container category-chart-viewport">
+        <div class="category-chart-row">
+          <div class="category-chart-plot">
+            <div class="category-chart-canvas-host">
+              <canvas id="searchRejectionChart"></canvas>
+            </div>
+          </div>
+          <div class="category-vscroll-wrap">
+            <input type="range" id="searchRejectionScrollRange" class="category-vscroll-range"
+                   orient="vertical" min="0" max="0" value="0" step="1"
+                   aria-label="Scroll rejection list" style="display: none;" />
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1073,82 +1095,234 @@ let searchTimeseriesChart;
   });
 })();
 
+// ---------------------------------------------------------------
+// makeViewportChart — reusable factory for scrollable bar charts.
+// Uses Chart.js y.min / y.max as a viewport instead of making the
+// canvas tall and relying on CSS overflow-y (which breaks with
+// maintainAspectRatio: false).
+//
+// Returns { chart, refresh(sortedAscItems, getLabelFn, updateDatasetsFn) }
+// where sortedAscItems must be sorted ascending so the largest bar
+// ends up at the top (Chart.js indexAxis:'y', reverse:false).
+// ---------------------------------------------------------------
+function makeViewportChart(canvasId, scrollRangeId, scrollWrapSel, buildChart) {
+  const canvas    = document.getElementById(canvasId);
+  const scrollRng = document.getElementById(scrollRangeId);
+  const scrollWrp = document.querySelector(scrollWrapSel);
+  const host      = canvas?.closest('.category-chart-canvas-host');
+  const ROW_MIN_PX      = 14;
+  const AXIS_RESERVE_PX = 40;
+  let scrollStart = null;
+
+  const chart = buildChart(canvas);
+  if (scrollWrp) scrollWrp.style.display = 'none';
+
+  function visibleCap() {
+    if (!host) return 12;
+    const h = host.getBoundingClientRect().height;
+    return h ? Math.max(1, Math.floor((h - AXIS_RESERVE_PX) / ROW_MIN_PX)) : 12;
+  }
+
+  function applyViewport(count, preferredStart) {
+    const yScale  = chart.options.scales.y;
+    const visible = Math.min(visibleCap(), count);
+    if (count === 0 || count <= visible) {
+      delete yScale.min;
+      delete yScale.max;
+      scrollStart = null;
+      if (scrollWrp) scrollWrp.style.display = 'none';
+    } else {
+      const maxStart = count - visible;
+      const start = preferredStart != null
+        ? Math.min(Math.max(0, preferredStart), maxStart)
+        : (scrollStart != null ? Math.min(scrollStart, maxStart) : maxStart);
+      scrollStart = start;
+      yScale.min = start;
+      yScale.max = start + visible - 1;
+      if (scrollWrp && scrollRng) {
+        scrollWrp.style.display = 'flex';
+        scrollRng.min   = 0;
+        scrollRng.max   = String(maxStart);
+        scrollRng.value = String(start);
+      }
+    }
+  }
+
+  function refresh(sortedAscItems, getLabelFn, updateDatasetsFn, startIndex) {
+    if (!chart) return;
+    chart.data.labels = sortedAscItems.map(getLabelFn);
+    updateDatasetsFn(chart, sortedAscItems);
+    applyViewport(chart.data.labels.length, startIndex != null ? startIndex : scrollStart);
+    chart.update('none');
+  }
+
+  if (scrollRng) {
+    scrollRng.addEventListener('input', () => {
+      const count   = chart.data.labels.length;
+      const visible = Math.min(visibleCap(), count);
+      if (count <= visible) return;
+      const maxStart = count - visible;
+      const start    = Math.min(Math.max(0, +scrollRng.value), maxStart);
+      scrollStart = start;
+      chart.options.scales.y.min = start;
+      chart.options.scales.y.max = start + visible - 1;
+      chart.update('none');
+    });
+  }
+  if (host) {
+    host.addEventListener('wheel', e => {
+      if (!scrollWrp || scrollWrp.style.display === 'none') return;
+      e.preventDefault();
+      const count   = chart.data.labels.length;
+      const visible = Math.min(visibleCap(), count);
+      if (count <= visible) return;
+      const maxStart = count - visible;
+      scrollStart    = Math.min(Math.max(0, (scrollStart || 0) + (e.deltaY > 0 ? 1 : -1)), maxStart);
+      if (scrollRng) scrollRng.value = String(scrollStart);
+      chart.options.scales.y.min = scrollStart;
+      chart.options.scales.y.max = scrollStart + visible - 1;
+      chart.update('none');
+    }, { passive: false });
+
+    if (typeof ResizeObserver !== 'undefined') {
+      let resizeTimer = null;
+      new ResizeObserver(() => {
+        if (!chart) return;
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          chart.resize();
+          applyViewport(chart.data.labels.length, scrollStart);
+          chart.update('none');
+        }, 40);
+      }).observe(host);
+    }
+  }
+
+  function reflow() {
+    if (!chart) return;
+    applyViewport(chart.data.labels.length, scrollStart);
+    chart.update('none');
+  }
+
+  return { chart, refresh, reflow };
+}
+
 // -- Search: Listings by status (horizontal stacked bar) --
 let searchStatusBarChart;
+let searchStatusBarVP;
 (function() {
   const rawData = {{ status_bar_data|tojson_safe }};
-  const queries = rawData.map(d => d.query);
-  const chartHeight = Math.max(300, queries.length * 28);
-  const canvas = document.getElementById('searchStatusBarChart');
-  canvas.style.height = chartHeight + 'px';
-  canvas.height = chartHeight;
-  searchStatusBarChart = new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels: queries,
-      datasets: [
-        { label: 'Active', data: rawData.map(d => d.active), backgroundColor: '#2ecc40', stack: 's' },
-        { label: 'Sold',   data: rawData.map(d => d.sold),   backgroundColor: '#0074d9', stack: 's' },
-        { label: 'Unsold', data: rawData.map(d => d.unsold), backgroundColor: '#ff4136', stack: 's' },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      indexAxis: 'y',
-      scales: {
-        x: { stacked: true, ticks: { precision: 0 } },
-        y: { stacked: true },
+  searchStatusBarVP = makeViewportChart(
+    'searchStatusBarChart',
+    'searchStatusBarScrollRange',
+    '#panel-search-status-bar .category-vscroll-wrap',
+    canvas => new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [
+          { label: 'Active', data: [], backgroundColor: '#2ecc40', stack: 's' },
+          { label: 'Sold',   data: [], backgroundColor: '#0074d9', stack: 's' },
+          { label: 'Unsold', data: [], backgroundColor: '#ff4136', stack: 's' },
+        ],
       },
-      plugins: { legend: { position: 'top' } },
-    },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        scales: {
+          x: { stacked: true, ticks: { precision: 0 } },
+          y: { stacked: true },
+        },
+        plugins: { legend: { position: 'top' } },
+      },
+    })
+  );
+  searchStatusBarChart = searchStatusBarVP.chart;
+  const sorted = [...rawData].sort(
+    (a, b) => (a.active + a.sold + a.unsold) - (b.active + b.sold + b.unsold)
+  );
+  searchStatusBarVP.refresh(sorted, d => d.query, (ch, items) => {
+    ch.data.datasets[0].data = items.map(d => d.active);
+    ch.data.datasets[1].data = items.map(d => d.sold);
+    ch.data.datasets[2].data = items.map(d => d.unsold);
   });
 })();
 
+document.querySelector('#group-search-terms .chart-tab-nav')?.addEventListener('click', event => {
+  if (!event.target.closest('button[data-panel="search-status-bar"]')) return;
+  requestAnimationFrame(() => {
+    if (!searchStatusBarVP) return;
+    searchStatusBarChart.resize();
+    searchStatusBarVP.reflow();
+  });
+});
+
 // -- Search: Rejection rate (horizontal bar) --
 let searchRejectionChart;
+let searchRejectionVP;
 let searchRejectionRawData;
 (function() {
   searchRejectionRawData = {{ rejection_rate_data|tojson_safe }};
-  searchRejectionRawData.sort((a, b) => b.rate - a.rate);
-  const queries = searchRejectionRawData.map(d => d.query);
-  const rates = searchRejectionRawData.map(d => d.rate);
-  const chartHeight = Math.max(300, queries.length * 28);
-  const canvas = document.getElementById('searchRejectionChart');
-  canvas.style.height = chartHeight + 'px';
-  canvas.height = chartHeight;
-  searchRejectionChart = new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels: queries,
-      datasets: [{
-        label: 'Rejection Rate (%)',
-        data: rates,
-        backgroundColor: rates.map(r => r > 70 ? '#ff4136' : r > 40 ? '#ff851b' : '#2ecc40'),
-        borderRadius: 3,
-      }],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      indexAxis: 'y',
-      scales: {
-        x: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
+  searchRejectionVP = makeViewportChart(
+    'searchRejectionChart',
+    'searchRejectionScrollRange',
+    '#panel-search-rejection .category-vscroll-wrap',
+    canvas => new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Rejection Rate (%)',
+          data: [],
+          backgroundColor: [],
+          borderRadius: 3,
+        }],
       },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: function(ctx) {
-              const item = searchRejectionRawData[ctx.dataIndex];
-              return item.rate + '% (' + item.rejected + '/' + item.verified + ' verified)';
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        scales: {
+          x: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
+          y: {},
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const query = ctx.label;
+                const item  = searchRejectionRawData.find(d => d.query === query);
+                if (!item) return ctx.formattedValue + '%';
+                return item.rate + '% (' + item.rejected + '/' + item.verified + ' verified)';
+              },
             },
           },
         },
       },
-    },
+    })
+  );
+  searchRejectionChart = searchRejectionVP.chart;
+  // Sort ascending so highest rate is at the top.
+  const sorted = [...searchRejectionRawData].sort((a, b) => a.rate - b.rate);
+  searchRejectionVP.refresh(sorted, d => d.query, (ch, items) => {
+    const rates = items.map(d => d.rate);
+    ch.data.datasets[0].data = rates;
+    ch.data.datasets[0].backgroundColor = rates.map(
+      r => r > 70 ? '#ff4136' : r > 40 ? '#ff851b' : '#2ecc40'
+    );
   });
 })();
+
+document.querySelector('#group-search-terms .chart-tab-nav')?.addEventListener('click', event => {
+  if (!event.target.closest('button[data-panel="search-rejection"]')) return;
+  requestAnimationFrame(() => {
+    if (!searchRejectionVP) return;
+    searchRejectionChart.resize();
+    searchRejectionVP.reflow();
+  });
+});
 
 // -- Classification: Score histogram --
 let classHistogramChart;
@@ -1532,25 +1706,30 @@ function updateCharts(data) {
 
   // Search terms: status bar
   const sbd = data.status_bar_data || [];
-  if (searchStatusBarChart && sbd.length) {
-    const queries = sbd.map(d => d.query);
-    searchStatusBarChart.data.labels = queries;
-    searchStatusBarChart.data.datasets[0].data = sbd.map(d => d.active);
-    searchStatusBarChart.data.datasets[1].data = sbd.map(d => d.sold);
-    searchStatusBarChart.data.datasets[2].data = sbd.map(d => d.unsold);
-    searchStatusBarChart.update('none');
+  if (searchStatusBarVP && sbd.length) {
+    const sortedSbd = [...sbd].sort(
+      (a, b) => (a.active + a.sold + a.unsold) - (b.active + b.sold + b.unsold)
+    );
+    searchStatusBarVP.refresh(sortedSbd, d => d.query, (ch, items) => {
+      ch.data.datasets[0].data = items.map(d => d.active);
+      ch.data.datasets[1].data = items.map(d => d.sold);
+      ch.data.datasets[2].data = items.map(d => d.unsold);
+    });
   }
 
   // Search terms: rejection rate
-  const rrd = (data.rejection_rate_data || []).slice().sort((a, b) => b.rate - a.rate);
-  if (searchRejectionChart && rrd.length) {
+  const rrd = (data.rejection_rate_data || []).slice();
+  if (searchRejectionVP && rrd.length) {
     searchRejectionRawData = rrd;
-    const queries = rrd.map(d => d.query);
-    const rates = rrd.map(d => d.rate);
-    searchRejectionChart.data.labels = queries;
-    searchRejectionChart.data.datasets[0].data = rates;
-    searchRejectionChart.data.datasets[0].backgroundColor = rates.map(r => r > 70 ? '#ff4136' : r > 40 ? '#ff851b' : '#2ecc40');
-    searchRejectionChart.update('none');
+    // Sort ascending so highest rate ends up at the top of the chart.
+    const sortedRrd = [...rrd].sort((a, b) => a.rate - b.rate);
+    searchRejectionVP.refresh(sortedRrd, d => d.query, (ch, items) => {
+      const rates = items.map(d => d.rate);
+      ch.data.datasets[0].data = rates;
+      ch.data.datasets[0].backgroundColor = rates.map(
+        r => r > 70 ? '#ff4136' : r > 40 ? '#ff851b' : '#2ecc40'
+      );
+    });
   }
 
   // Classification: score histogram
