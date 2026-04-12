@@ -264,6 +264,12 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     preferred_domain="vinted.fr",
     http_warm_up=True,
   ),
+  "todocoleccion": WebsiteConfig(
+    transport=TransportKind.HTTP,
+    fallback_transport=TransportKind.BROWSER,
+    monitoring_strategy=MonitoringStrategy.SNAPSHOT,
+    request_delay=3.0,
+  ),
 }
 
 
