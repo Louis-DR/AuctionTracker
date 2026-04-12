@@ -4,4 +4,20 @@ Import this module to trigger auto-registration of all parsers
 into the ParserRegistry.
 """
 
-from auction_tracker.parsing.sites import catawiki, drouot, ebay, gazette_drouot, interencheres, invaluable, kleinanzeigen, leboncoin, liveauctioneers, todocoleccion, vinted, yahoo_japan  # noqa: F401
+from auction_tracker.parsing.sites import (  # noqa: F401
+  catawiki,
+  drouot,
+  ebay,
+  gazette_drouot,
+  interencheres,
+  invaluable,
+  kleinanzeigen,
+  leboncoin,
+  liveauctioneers,
+  marktplaats,
+  ricardo,
+  subito,
+  todocoleccion,
+  vinted,
+  yahoo_japan,
+)

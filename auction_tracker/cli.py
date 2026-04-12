@@ -96,13 +96,21 @@ def seed_websites(app: AppContext) -> None:
     "vinted": "https://www.vinted.fr",
     "todocoleccion": "https://www.todocoleccion.net",
     "kleinanzeigen": "https://www.kleinanzeigen.de",
+    "ricardo": "https://www.ricardo.ch",
+    "subito": "https://www.subito.it",
+    "marktplaats": "https://www.marktplaats.nl",
   }
 
   with app.database.session() as session:
     for name, url in website_urls.items():
+      default_currency = "EUR"
+      if name == "yahoo_japan":
+        default_currency = "JPY"
+      elif name == "ricardo":
+        default_currency = "CHF"
       app.repository.get_or_create_website(
         session, name=name, base_url=url,
-        default_currency=("JPY" if name == "yahoo_japan" else "EUR"),
+        default_currency=default_currency,
       )
     session.commit()
 

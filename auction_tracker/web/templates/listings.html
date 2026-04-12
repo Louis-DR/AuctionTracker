@@ -426,15 +426,21 @@
 
     // Website color mapping — keys match the lowercase names stored in the DB.
     var websiteColors = {
-      "ebay":           "#d4af37",
+      "ebay":           "#ffbd14",
       "catawiki":       "#0033ff",
       "drouot":         "#dc2926",
-      "interencheres":  "#17a2b8",
+      "interencheres":  "#ef6060",
       "invaluable":     "#636569",
       "liveauctioneers":"#0097ba",
       "leboncoin":      "#ec5a13",
-      "yahoo_japan":    "#410093",
-      "gazette_drouot": "#8e44ad",
+      "yahoo_japan":    "#7d2eff",
+      "gazette_drouot": "#0b2230",
+      "vinted":         "#057a84",
+      "todocoleccion":  "#692084",
+      "kleinanzeigen":  "#b5e941",
+      "ricardo":        "#ef7310",
+      "subito":         "#f9423a",
+      "marktplaats":    "#eda566",
     };
 
     // Calculate min/max dates and prices from all data.
@@ -657,14 +663,14 @@
               // Position tooltip.
               var position = context.chart.canvas.getBoundingClientRect();
               tooltipEl.style.display = "block";
-              
+
               // Position relative to the chart container.
               var chartContainer = context.chart.canvas.parentElement;
               var containerRect = chartContainer.getBoundingClientRect();
-              
+
               var left = tooltipModel.caretX + 10;
               var top = tooltipModel.caretY - 10;
-              
+
               tooltipEl.style.left = left + "px";
               tooltipEl.style.top = top + "px";
 
@@ -672,7 +678,7 @@
               setTimeout(function() {
                 var tooltipRect = tooltipEl.getBoundingClientRect();
                 var containerRect = chartContainer.getBoundingClientRect();
-                
+
                 if (tooltipRect.right > containerRect.right) {
                   tooltipEl.style.left = (tooltipModel.caretX - tooltipRect.width - 10) + "px";
                 }
