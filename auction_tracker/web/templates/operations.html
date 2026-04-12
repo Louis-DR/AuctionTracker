@@ -78,8 +78,11 @@
   margin-top: 0;
 }
 
-/* Tabbed chart group. */
+/* Tabbed chart group: fixed height, flex-column so the chart panel can fill it. */
 .chart-tab-group {
+  display: flex;
+  flex-direction: column;
+  height: clamp(300px, 40vh, 540px);
   border: 1px solid var(--pico-muted-border-color);
   border-radius: var(--pico-border-radius);
   padding: 0.75rem;
@@ -87,12 +90,14 @@
 .chart-tab-group h2 {
   margin: 0 0 0.5rem 0;
   font-size: 1em;
+  flex-shrink: 0;
 }
 .chart-tab-nav {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
   margin-bottom: 0.75rem;
+  flex-shrink: 0;
 }
 .chart-tab-nav button {
   padding: 0.2em 0.7em;
@@ -112,31 +117,34 @@
 .chart-tab-panel {
   display: none;
 }
+/* Active panel fills the remaining height inside the card. */
 .chart-tab-panel.active {
-  display: block;
-}
-
-/* Classification group: stretch in grid row so the active tab can fill cell height. */
-#group-classification.chart-tab-group {
-  display: flex;
-  flex-direction: column;
-  min-height: clamp(300px, 42vh, 620px);
-}
-#group-classification .chart-tab-panel.active {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
-  justify-content: flex-start;
+}
+/* Chart containers inside tab panels: fill available height, no extra chrome
+   (the card border already provides visual grouping). */
+.chart-tab-group .chart-tab-panel .chart-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin-bottom: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+/* Canvas inside plain containers fills the container height. */
+.chart-tab-group .chart-tab-panel .chart-container > canvas {
+  height: 100% !important;
 }
 
-/* Classification categories: fill tab panel; plot + vertical scroll. */
+/* Scrollable viewport charts: fill tab panel; plot + vertical scroll. */
 .category-chart-viewport {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  min-height: 220px;
-  height: auto;
+  min-height: 0;
 }
 .category-chart-row {
   flex: 1 1 0;
@@ -1242,7 +1250,10 @@ let searchStatusBarVP;
         indexAxis: 'y',
         scales: {
           x: { stacked: true, ticks: { precision: 0 } },
-          y: { stacked: true },
+          y: {
+            stacked: true,
+            ticks: { autoSkip: false, font: { size: 9 } },
+          },
         },
         plugins: { legend: { position: 'top' } },
       },
@@ -1256,6 +1267,10 @@ let searchStatusBarVP;
     ch.data.datasets[0].data = items.map(d => d.active);
     ch.data.datasets[1].data = items.map(d => d.sold);
     ch.data.datasets[2].data = items.map(d => d.unsold);
+    // Freeze the x-axis range to the global maximum so it never changes
+    // when scrolling through the viewport.
+    const globalMax = items.reduce((m, d) => Math.max(m, d.active + d.sold + d.unsold), 1);
+    ch.options.scales.x.max = globalMax;
   });
 })();
 
@@ -1295,7 +1310,7 @@ let searchRejectionRawData;
         indexAxis: 'y',
         scales: {
           x: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
-          y: {},
+          y: { ticks: { autoSkip: false, font: { size: 9 } } },
         },
         plugins: {
           legend: { display: false },
@@ -1721,6 +1736,8 @@ function updateCharts(data) {
       ch.data.datasets[0].data = items.map(d => d.active);
       ch.data.datasets[1].data = items.map(d => d.sold);
       ch.data.datasets[2].data = items.map(d => d.unsold);
+      const globalMax = items.reduce((m, d) => Math.max(m, d.active + d.sold + d.unsold), 1);
+      ch.options.scales.x.max = globalMax;
     });
   }
 
