@@ -1416,13 +1416,39 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           website: _ts(buckets)
           for website, buckets in hourly_errors_by_website.items()
         },
+        "error_rate_by_website": {
+          website: [
+            round(
+              buckets.get(label, 0)
+              / (
+                buckets.get(label, 0)
+                + hourly_requests_by_website.get(website, {}).get(label, 0)
+              )
+              * 100,
+              1,
+            )
+            if (
+              buckets.get(label, 0)
+              + hourly_requests_by_website.get(website, {}).get(label, 0)
+            ) > 0
+            else None
+            for label in time_labels
+          ]
+          for website, buckets in hourly_errors_by_website.items()
+        },
         "errors_by_source": {
           source: _ts(buckets)
           for source, buckets in hourly_errors_by_source.items()
         },
         "error_rate": [
-          round(hourly_errors.get(label, 0) / hourly_requests[label] * 100, 2)
-          if hourly_requests.get(label, 0) > 0 else 0
+          round(
+            hourly_errors.get(label, 0)
+            / (hourly_errors.get(label, 0) + hourly_requests.get(label, 0))
+            * 100,
+            2,
+          )
+          if (hourly_errors.get(label, 0) + hourly_requests.get(label, 0)) > 0
+          else 0
           for label in time_labels
         ],
         "load_pct_by_website": load_pct_by_website,
