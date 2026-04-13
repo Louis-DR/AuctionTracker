@@ -7,6 +7,7 @@ fallback transport (if configured).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from auction_tracker.config import AppConfig, TransportKind, WebsiteConfig
@@ -37,6 +38,18 @@ class TransportRouter:
     self._http: HttpTransport | None = None
     self._browser: BrowserTransport | None = None
     self._camoufox: CamoufoxTransport | None = None
+    self._browser_lock = asyncio.Lock()
+    self._camoufox_lock = asyncio.Lock()
+
+  def _needs_transport(self, kind: TransportKind) -> bool:
+    """Check whether any enabled website uses the given transport."""
+    for name in self._config.websites:
+      website_config = self._config.website(name)
+      if not website_config.enabled:
+        continue
+      if website_config.transport == kind or website_config.fallback_transport == kind:
+        return True
+    return False
 
   async def start(self) -> None:
     transport_config = self._config.transport
@@ -48,11 +61,22 @@ class TransportRouter:
       retry_backoff_factor=transport_config.retry_backoff_factor,
     )
     await self._http.start()
-    # Browser transport is started lazily on first use.
+
+    # Eagerly start browser-based transports if any enabled website
+    # needs them. This avoids lazy-init races when multiple workers
+    # all try to start the same transport concurrently.
+    if self._needs_transport(TransportKind.BROWSER):
+      await self._ensure_browser()
+    if self._needs_transport(TransportKind.CAMOUFOX):
+      await self._ensure_camoufox()
 
   async def _ensure_browser(self) -> BrowserTransport:
-    """Start the browser transport on first use."""
-    if self._browser is None:
+    """Start the browser transport on first use (lock-protected)."""
+    if self._browser is not None:
+      return self._browser
+    async with self._browser_lock:
+      if self._browser is not None:
+        return self._browser
       transport_config = self._config.transport
       self._browser = BrowserTransport(
         headless=transport_config.browser_headless,
@@ -60,19 +84,24 @@ class TransportRouter:
         timeout=transport_config.default_timeout,
       )
       await self._browser.start()
-    return self._browser
+      return self._browser
 
   async def _ensure_camoufox(self) -> CamoufoxTransport:
-    """Start the Camoufox transport on first use."""
-    if self._camoufox is None:
+    """Start the Camoufox transport on first use (lock-protected)."""
+    if self._camoufox is not None:
+      return self._camoufox
+    async with self._camoufox_lock:
+      if self._camoufox is not None:
+        return self._camoufox
       transport_config = self._config.transport
       self._camoufox = CamoufoxTransport(
         timeout=transport_config.default_timeout,
         request_delay=transport_config.default_request_delay,
+        max_pages=transport_config.browser_page_limit,
         profile_directory=self._config.database.path.parent / "browser_profiles",
       )
       await self._camoufox.start()
-    return self._camoufox
+      return self._camoufox
 
   async def stop(self) -> None:
     if self._http is not None:
