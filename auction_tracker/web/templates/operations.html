@@ -456,7 +456,8 @@
     <h2>Errors (<span class="ops-hours-label-text">{{ range_label }}</span>)</h2>
     <div class="chart-tab-nav" data-group="errors">
       <button class="active" data-panel="errors-time">Over Time</button>
-      <button data-panel="errors-website">By Website</button>
+      <button data-panel="errors-website">Count by Website</button>
+      <button data-panel="errors-rate">Rate by Website</button>
       <button data-panel="errors-source">By Source</button>
     </div>
     <div class="chart-tab-panel active" id="panel-errors-time">
@@ -467,6 +468,11 @@
     <div class="chart-tab-panel" id="panel-errors-website">
       <div class="chart-container">
         <canvas id="errorsWebsiteChart" height="220"></canvas>
+      </div>
+    </div>
+    <div class="chart-tab-panel" id="panel-errors-rate">
+      <div class="chart-container">
+        <canvas id="errorsRateChart" height="220"></canvas>
       </div>
     </div>
     <div class="chart-tab-panel" id="panel-errors-source">
@@ -960,6 +966,38 @@ const errorsWebsiteChart = new Chart(document.getElementById('errorsWebsiteChart
     datasets: buildStackedDatasets(initialTimeseries.errors_by_website || {}, k => getWebsiteColor(k)),
   },
   options: barOpts(true),
+});
+
+// -- Error rate by website over time (line chart, % per bucket) --
+function buildErrorRateDatasets(rateByWebsite) {
+  return Object.entries(rateByWebsite).map(([website, values]) => ({
+    label: website,
+    data: values,
+    borderColor: getWebsiteColor(website),
+    backgroundColor: 'transparent',
+    tension: 0.3,
+    pointRadius: 2,
+    spanGaps: true,
+  }));
+}
+const errorsRateChart = new Chart(document.getElementById('errorsRateChart'), {
+  type: 'line',
+  data: {
+    labels: initialShortLabels,
+    datasets: buildErrorRateDatasets(initialTimeseries.error_rate_by_website || {}),
+  },
+  options: {
+    responsive: true,
+    interaction: { intersect: false, mode: 'index' },
+    scales: {
+      y: {
+        beginAtZero: true,
+        ticks: { callback: v => v + '%' },
+        title: { display: true, text: 'Error rate (errors / requests × 100)' },
+      },
+    },
+    plugins: { legend: { position: 'top' } },
+  },
 });
 
 // -- Errors by source over time (stacked bar) --
@@ -1677,6 +1715,12 @@ function updateCharts(data) {
   errorsWebsiteChart.data.labels = shortLabels;
   errorsWebsiteChart.data.datasets = buildStackedDatasets(ebwData, k => getWebsiteColor(k));
   errorsWebsiteChart.update('none');
+
+  // Error rate by website (line) — rebuild datasets when keys change
+  const erwData = ts.error_rate_by_website || {};
+  errorsRateChart.data.labels = shortLabels;
+  errorsRateChart.data.datasets = buildErrorRateDatasets(erwData);
+  errorsRateChart.update('none');
 
   // Errors by source (stacked) — rebuild datasets when keys change
   const ebsData = ts.errors_by_source || {};
