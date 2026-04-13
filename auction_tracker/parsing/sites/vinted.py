@@ -38,6 +38,8 @@ import re
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode, urlparse
 
+from selectolax.parser import HTMLParser
+
 from auction_tracker.parsing.base import (
   Parser,
   ParserBlocked,
@@ -273,13 +275,23 @@ _NEXT_DATA_RE = re.compile(
 
 def _extract_next_data(html: str) -> dict | None:
   """Return the parsed ``__NEXT_DATA__`` JSON, or ``None`` if absent."""
+  # Prefer an HTML parser over regex to avoid edge cases with attributes,
+  # whitespace, or unexpected script formatting.
+  with contextlib.suppress(Exception):
+    tree = HTMLParser(html)
+    node = tree.css_first("script#__NEXT_DATA__")
+    if node is not None:
+      payload = (node.text() or "").strip()
+      if payload:
+        with contextlib.suppress(json.JSONDecodeError):
+          return json.loads(payload)
+
   match = _NEXT_DATA_RE.search(html)
   if not match:
     return None
-  try:
+  with contextlib.suppress(json.JSONDecodeError):
     return json.loads(match.group(1))
-  except json.JSONDecodeError:
-    return None
+  return None
 
 
 def _extract_item_from_next_data(html: str) -> dict | None:
@@ -292,7 +304,7 @@ def _extract_item_from_next_data(html: str) -> dict | None:
   """
   data = _extract_next_data(html)
   if data is None:
-    logger.debug("[vinted] No __NEXT_DATA__ block found in HTML")
+    logger.warning("[vinted] No __NEXT_DATA__ block found in HTML")
     return None
 
   props = data.get("props") or {}
@@ -334,7 +346,7 @@ def _extract_search_items_from_next_data(html: str) -> list | None:
   """
   data = _extract_next_data(html)
   if data is None:
-    logger.debug("[vinted] No __NEXT_DATA__ block found in catalog HTML")
+    logger.warning("[vinted] No __NEXT_DATA__ block found in catalog HTML")
     return None
 
   props = data.get("props") or {}
