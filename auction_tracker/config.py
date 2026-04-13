@@ -265,8 +265,13 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     exclude_from_discovery=True,
   ),
   "vinted": WebsiteConfig(
-    transport=TransportKind.HTTP,
-    fallback_transport=TransportKind.CAMOUFOX,
+    # Vinted's /api/v2/ endpoints require an Authorization bearer token
+    # that is only injected by the JavaScript SPA — a direct browser
+    # navigation or curl request never sends it.  We therefore navigate
+    # to the HTML web pages and parse the __NEXT_DATA__ block embedded
+    # by Next.js SSR, which avoids auth entirely.
+    transport=TransportKind.CAMOUFOX,
+    fallback_transport=TransportKind.HTTP,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
     request_delay=3.0,
     preferred_domain="vinted.fr",

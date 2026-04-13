@@ -7,16 +7,19 @@ the item is deleted.
 
 Key technical facts used by this parser:
 
-* The site is a client-side React SPA.  Static HTML scraping yields
-  nothing useful; data is fetched via internal JSON APIs.
-* **Search API**: ``GET /api/v2/catalog/items?search_text=QUERY``
-  returns a JSON payload with an ``"items"`` array.
-* **Item details API**: ``GET /api/v2/items/{id}/details``
-  returns a JSON payload with an ``"item"`` object.
-* Anti-bot protection (Cloudflare / Datadome-class) requires a
-  session cookie obtained by visiting the homepage first
-  (``http_warm_up`` in transport config).  The HTTP transport's
-  ``curl_cffi`` with Chrome TLS impersonation handles this.
+* The site is a Next.js app that server-side renders item data into a
+  ``<script id="__NEXT_DATA__">`` JSON block on every page.  We
+  navigate to the regular HTML page (not the API endpoint) and extract
+  data from that block.  This avoids the need for authentication tokens
+  which the internal ``/api/v2/`` endpoints require when accessed by a
+  browser directly (the browser would not inject the ``Authorization``
+  header that the JavaScript SPA normally adds to XHR calls).
+* **Search**: ``GET /catalog?search_text=QUERY`` – the Next.js page
+  embeds initial search results in ``__NEXT_DATA__``.  If the HTML page
+  cannot be parsed, a fallback to the JSON API
+  ``/api/v2/catalog/items?search_text=QUERY`` is attempted.
+* **Listing fetch**: ``GET /items/{id}-{slug}`` – all item data is
+  embedded in ``__NEXT_DATA__`` by the SSR layer.
 * Prices are in the seller's local currency (usually EUR).
 * Condition is indicated by ``status_id``:
   6 = new with tags, 1 = new without tags, 2 = very good,
@@ -37,8 +40,10 @@ from urllib.parse import urlencode, urlparse
 
 from auction_tracker.parsing.base import (
   Parser,
+  ParserBlocked,
   ParserCapabilities,
   ParserRegistry,
+  check_html_for_blocking,
 )
 from auction_tracker.parsing.models import (
   ScrapedListing,
@@ -105,9 +110,10 @@ class VintedParser(Parser):
   # ----------------------------------------------------------------
 
   def build_search_url(self, query: str, **kwargs) -> str:
-    """Build a Vinted catalog search API URL.
+    """Build a Vinted catalog search web-page URL.
 
-    The search endpoint returns JSON.  Optional kwargs:
+    We request the regular catalog page so the Next.js SSR layer
+    embeds search results in ``__NEXT_DATA__``.  Optional kwargs:
       domain: Regional domain (e.g. "vinted.fr").
       page: Page number (1-indexed, default 1).
     """
@@ -122,22 +128,28 @@ class VintedParser(Parser):
     page = kwargs.get("page")
     if page and int(page) > 1:
       params["page"] = int(page)
-    return f"https://{domain}/api/v2/catalog/items?{urlencode(params)}"
+    return f"https://{domain}/catalog?{urlencode(params)}"
 
   def build_fetch_url(self, url: str) -> str:
-    """Rewrite a public item URL to the API details endpoint.
+    """Return the canonical HTML item page URL.
 
-    Public URLs look like ``/items/123456-some-title``.
-    The API endpoint is ``/api/v2/items/123456/details``.
-    If the URL is already an API URL it is returned unchanged.
+    Previously this rewrote to the internal ``/api/v2/items/{id}/details``
+    endpoint.  That endpoint now requires an ``Authorization`` bearer
+    token that Vinted's JavaScript SPA injects into XHR calls — a
+    browser navigating to the URL directly never adds that header, so
+    the API always returns ``invalid_authentication_token``.
+
+    We therefore return the regular web-page URL so the transport
+    navigates to the HTML page and the parser extracts data from the
+    ``__NEXT_DATA__`` block embedded by Next.js SSR.
     """
-    if "/api/v2/" in url:
-      return url
-    match = re.search(r"/items/(\d+)", url)
-    if match:
-      item_id = match.group(1)
+    # Un-rewrite any previously-stored API URLs so old watch records
+    # stored before this change continue to work.
+    api_match = re.search(r"/api/v2/items/(\d+)/details", url)
+    if api_match:
+      item_id = api_match.group(1)
       parsed = urlparse(url)
-      return f"https://{parsed.netloc}/api/v2/items/{item_id}/details"
+      return f"https://{parsed.netloc}/items/{item_id}"
     return url
 
   def extract_external_id(self, url: str) -> str | None:
@@ -149,38 +161,186 @@ class VintedParser(Parser):
   # ----------------------------------------------------------------
 
   def parse_search_results(self, html: str, url: str = "") -> list[ScrapedSearchResult]:
-    data = _parse_json(html)
-    items = data.get("items")
-    if items is None:
-      raise ValueError(
-        "Vinted search response does not contain 'items' key"
-      )
+    """Parse search results from an HTML catalog page or JSON API response.
 
+    Primary path: extract ``__NEXT_DATA__`` from the HTML catalog page.
+    Fallback: if the response is already a JSON API payload (HTTP
+    transport hitting the old API URL), parse it directly.
+    """
     domain = _domain_from_url(url)
-    results: list[ScrapedSearchResult] = []
-    for item in items:
-      result = _item_to_search_result(item, domain)
-      if result is not None:
-        results.append(result)
 
-    logger.info(
-      "Vinted search: parsed %d results from %d items",
-      len(results), len(items),
-    )
-    return results
+    # Try __NEXT_DATA__ first (expected from web-page navigation).
+    items = _extract_search_items_from_next_data(html)
+    if items is not None:
+      results: list[ScrapedSearchResult] = []
+      for item in items:
+        result = _item_to_search_result(item, domain)
+        if result is not None:
+          results.append(result)
+      logger.info(
+        "Vinted search (__NEXT_DATA__): parsed %d results from %d items",
+        len(results), len(items),
+      )
+      return results
+
+    # Fallback: JSON API response.
+    stripped = html.strip()
+    if stripped.startswith("{"):
+      try:
+        data = _parse_json(html)
+        items_api = data.get("items")
+        if items_api is not None:
+          results = []
+          for item in items_api:
+            result = _item_to_search_result(item, domain)
+            if result is not None:
+              results.append(result)
+          logger.info(
+            "Vinted search (JSON API): parsed %d results from %d items",
+            len(results), len(items_api),
+          )
+          return results
+        # JSON returned but no items — check for auth/error response.
+        if "message_code" in stripped or "invalid_authentication" in stripped:
+          raise ParserBlocked(
+            "Vinted API returned an authentication error — "
+            "browser transport must navigate to the HTML catalog page",
+            url=url,
+          )
+      except (ValueError, KeyError):
+        pass
+
+    check_html_for_blocking(html, url)
+    raise ValueError("Could not extract Vinted search results from HTML or JSON")
 
   # ----------------------------------------------------------------
   # Listing
   # ----------------------------------------------------------------
 
   def parse_listing(self, html: str, url: str = "") -> ScrapedListing:
-    data = _parse_json(html)
-    item = data.get("item")
-    if item is None:
-      raise ValueError(
-        "Vinted item details response does not contain 'item' key"
-      )
-    return _parse_item_detail(item, url)
+    """Parse a listing from an HTML item page or JSON API response.
+
+    Primary path: extract ``__NEXT_DATA__`` from the HTML item page
+    (the expected result when a browser transport navigates to the
+    canonical ``/items/{id}-{slug}`` URL).
+    Fallback: if the response is a JSON API payload, parse it directly.
+    """
+    # Try __NEXT_DATA__ first.
+    item = _extract_item_from_next_data(html)
+    if item is not None:
+      return _parse_item_detail(item, url)
+
+    # Fallback: JSON API response.
+    stripped = html.strip()
+    if stripped.startswith("{"):
+      try:
+        data = _parse_json(html)
+        item_api = data.get("item")
+        if item_api is not None:
+          return _parse_item_detail(item_api, url)
+        # JSON returned but wrong structure — check for auth error.
+        if "message_code" in stripped or "invalid_authentication" in stripped:
+          raise ParserBlocked(
+            "Vinted API returned an authentication error — "
+            "browser transport must navigate to the HTML item page",
+            url=url,
+          )
+      except ParserBlocked:
+        raise
+      except (ValueError, KeyError):
+        pass
+
+    check_html_for_blocking(html, url)
+    raise ValueError("Could not extract Vinted item data from HTML or JSON response")
+
+
+# ------------------------------------------------------------------
+# __NEXT_DATA__ extraction
+# ------------------------------------------------------------------
+
+# Regex to extract the JSON content of the Next.js data script block.
+_NEXT_DATA_RE = re.compile(
+  r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+  re.DOTALL,
+)
+
+
+def _extract_next_data(html: str) -> dict | None:
+  """Return the parsed ``__NEXT_DATA__`` JSON, or ``None`` if absent."""
+  match = _NEXT_DATA_RE.search(html)
+  if not match:
+    return None
+  try:
+    return json.loads(match.group(1))
+  except json.JSONDecodeError:
+    return None
+
+
+def _extract_item_from_next_data(html: str) -> dict | None:
+  """Try to find the item dict inside ``__NEXT_DATA__``.
+
+  Vinted has changed the exact nesting path across frontend versions;
+  we probe a set of known locations so the parser is robust to minor
+  structural changes.  The returned dict has the same field names as
+  the ``/api/v2/items/{id}/details`` response ``item`` object.
+  """
+  data = _extract_next_data(html)
+  if data is None:
+    return None
+
+  props = data.get("props") or {}
+  page_props = props.get("pageProps") or {}
+  initial_state = (
+    props.get("initialState")
+    or page_props.get("initialState")
+    or {}
+  )
+
+  # Try each known path in priority order.
+  candidates = [
+    page_props.get("item"),
+    page_props.get("itemDto"),
+    (initial_state.get("item") or {}).get("item"),
+    (initial_state.get("items") or {}).get("item"),
+    page_props.get("pageProps", {}).get("item"),
+  ]
+  for candidate in candidates:
+    if isinstance(candidate, dict) and candidate.get("id"):
+      return candidate
+  return None
+
+
+def _extract_search_items_from_next_data(html: str) -> list | None:
+  """Try to find the items list inside ``__NEXT_DATA__`` for a catalog page.
+
+  Returns a list of item dicts (same structure as the API search result
+  ``items`` array), or ``None`` if the data cannot be located.
+  """
+  data = _extract_next_data(html)
+  if data is None:
+    return None
+
+  props = data.get("props") or {}
+  page_props = props.get("pageProps") or {}
+  initial_state = (
+    props.get("initialState")
+    or page_props.get("initialState")
+    or {}
+  )
+
+  # Try each known path in priority order.
+  candidates: list[list | None] = [
+    page_props.get("items"),
+    (page_props.get("catalog") or {}).get("items"),
+    (initial_state.get("catalog") or {}).get("items"),
+    (initial_state.get("items") or {}).get("items") if isinstance(
+      (initial_state.get("items") or {}), dict
+    ) else initial_state.get("items"),
+  ]
+  for candidate in candidates:
+    if isinstance(candidate, list):
+      return candidate
+  return None
 
 
 # ------------------------------------------------------------------

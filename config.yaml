@@ -123,8 +123,8 @@ websites:
     request_delay: 2s
   vinted:
     enabled: true
-    transport: http
-    fallback_transport: camoufox
+    transport: camoufox        # Navigate to HTML pages, parse __NEXT_DATA__
+    fallback_transport: http   # HTTP fallback if Camoufox is unavailable
     monitoring_strategy: snapshot
     request_delay: 3s
     preferred_domain: vinted.fr
