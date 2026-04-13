@@ -56,6 +56,7 @@ def main(ctx: click.Context, config_path: Path | None, verbose: bool) -> None:
   setup_logging(
     level=config.logging.level,
     log_file=config.logging.file,
+    log_dir=config.logging.log_dir,
     max_bytes=config.logging.max_bytes,
     backup_count=config.logging.backup_count,
   )

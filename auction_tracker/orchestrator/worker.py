@@ -62,6 +62,10 @@ logger = logging.getLogger(__name__)
 _MAX_CONSECUTIVE_FETCH_ERRORS = 3
 _UTILIZATION_EMIT_INTERVAL = 60.0
 
+# Interval for heartbeat log lines. If more than this many seconds
+# pass without any log output, the worker is likely frozen.
+_HEARTBEAT_INTERVAL = 300.0
+
 _PHASE_PRIORITY = {
   Phase.IMMINENT: 0,
   Phase.ENDING: 1,
@@ -175,6 +179,8 @@ class WebsiteWorker:
     self._last_utilization_emit: float = 0.0
     self._segment_start: float = 0.0
     self._in_tick: bool = False
+    self._last_heartbeat: float = 0.0
+    self._ticks_since_heartbeat: int = 0
 
   @property
   def name(self) -> str:
@@ -242,6 +248,8 @@ class WebsiteWorker:
     now = time.time()
     self._segment_start = now
     self._last_utilization_emit = now
+    self._last_heartbeat = now
+    self._ticks_since_heartbeat = 0
     self._active_accumulator = 0.0
     self._idle_accumulator = 0.0
     self._in_tick = False
@@ -262,6 +270,9 @@ class WebsiteWorker:
       # Flush the active segment, then switch back to idle for the sleep.
       self._flush_utilization()
       self._in_tick = False
+
+      self._ticks_since_heartbeat += 1
+      self._emit_heartbeat_if_due()
 
       if not executed:
         self._report_idle()
@@ -355,6 +366,28 @@ class WebsiteWorker:
         fetch_queue=len(self._fetch_queue),
         search_queue=len(self._pending_searches),
       )
+
+  def _emit_heartbeat_if_due(self) -> None:
+    now = time.time()
+    if now - self._last_heartbeat < _HEARTBEAT_INTERVAL:
+      return
+    elapsed_minutes = (now - self._last_heartbeat) / 60.0
+    logger.info(
+      "[%s] Heartbeat: %d ticks in last %.0fmin | "
+      "fetch_queue=%d watch_queue=%d search_queue=%d | "
+      "stats: fetched=%d watched=%d errors=%d",
+      self._name,
+      self._ticks_since_heartbeat,
+      elapsed_minutes,
+      len(self._fetch_queue),
+      len(self._watch_queue),
+      len(self._pending_searches),
+      self._stats.listings_fetched,
+      self._stats.watch_checks,
+      self._stats.errors,
+    )
+    self._last_heartbeat = now
+    self._ticks_since_heartbeat = 0
 
   def _report_idle(self) -> None:
     if self._live:
@@ -1014,6 +1047,10 @@ class Pipeline:
 
   def _build_workers(self, router: TransportRouter) -> None:
     """Create one worker per eligible website."""
+    from auction_tracker.logging_setup import add_website_log_handler
+
+    log_dir = self._config.logging.log_dir
+
     for name in self._config.websites:
       website_config = self._config.website(name)
       if not website_config.enabled:
@@ -1022,6 +1059,14 @@ class Pipeline:
         continue
       if not ParserRegistry.has(name):
         continue
+
+      if log_dir is not None:
+        add_website_log_handler(
+          name,
+          log_dir,
+          max_bytes=self._config.logging.max_bytes,
+          backup_count=self._config.logging.backup_count,
+        )
 
       self._workers[name] = WebsiteWorker(
         website_name=name,
