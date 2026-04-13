@@ -346,31 +346,24 @@ class CamoufoxTransport(Transport):
 
     await asyncio.sleep(random.uniform(0.5, 1.5))
 
-    # Intercept JSON API responses issued by the page's JavaScript via
-    # XHR / fetch.  SPAs like Vinted load all data dynamically after
-    # page load, so page.content() alone returns only the HTML shell.
-    # page.route() is synchronous from Playwright's point of view: the
-    # handler MUST resolve before the browser receives the response, so
-    # there is no race condition with page.on("response") async tasks.
+    # Collect JSON API responses issued by the page's JavaScript while it
+    # loads, so SPA parsers (e.g. Vinted) can use them.  We use a plain
+    # synchronous handler that just appends the Response object — no
+    # awaiting inside the callback avoids async-task race conditions.
+    # Response bodies remain readable after the event fires as long as
+    # the page hasn't navigated again, so we drain them after networkidle.
     import json as _json
-    _captured_api: dict[str, str] = {}
+    _json_responses: list = []
 
-    async def _route_api(route) -> None:
-      url_r = route.request.url
-      try:
-        response = await route.fetch()
-        with contextlib.suppress(Exception):
-          if len(_captured_api) < 20:
-            ct = (response.headers or {}).get("content-type", "")
-            if "json" in ct:
-              body = await response.body()
-              _captured_api[url_r] = body.decode("utf-8", errors="replace")
-        await route.fulfill(response=response)
-      except Exception:
-        with contextlib.suppress(Exception):
-          await route.continue_()
+    def _collect_json_response(response) -> None:
+      if len(_json_responses) >= 20:
+        return
+      with contextlib.suppress(Exception):
+        ct = (response.headers or {}).get("content-type", "")
+        if "json" in ct:
+          _json_responses.append(response)
 
-    await page.route("**/api/**", _route_api)
+    page.on("response", _collect_json_response)
     try:
       logger.debug("Camoufox navigating to %s", url)
       await page.goto(
@@ -394,6 +387,13 @@ class CamoufoxTransport(Transport):
       await self._dismiss_cookie_consent(page)
 
       await asyncio.sleep(random.uniform(0.5, 2.0))
+
+      # Read collected response bodies now that the page is idle.
+      _captured_api: dict[str, str] = {}
+      for resp in _json_responses:
+        with contextlib.suppress(Exception):
+          body = await resp.body()
+          _captured_api[resp.url] = body.decode("utf-8", errors="replace")
 
       if page.is_closed():
         raise TransportBlocked(
@@ -444,8 +444,7 @@ class CamoufoxTransport(Transport):
       )
 
     finally:
-      with contextlib.suppress(Exception):
-        await page.unroute("**/api/**", _route_api)
+      page.remove_listener("response", _collect_json_response)
 
   async def fetch(self, url: str, **kwargs) -> FetchResult:
     if self._context is None:

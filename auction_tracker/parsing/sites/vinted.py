@@ -243,6 +243,11 @@ class VintedParser(Parser):
     Fallback: if the response is a JSON API payload, parse it directly.
     """
     # Primary: API responses captured in-flight by CamoufoxTransport.
+    captured = _extract_captured_api(html)
+    if captured:
+      logger.debug("[vinted] Captured API keys: %s", list(captured.keys()))
+    else:
+      logger.warning("[vinted] No captured API responses found in HTML for %s", url)
     item = _extract_item_from_captured_api(html)
     if item is not None:
       return _parse_item_detail(item, url)
