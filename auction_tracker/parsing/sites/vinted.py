@@ -245,7 +245,7 @@ class VintedParser(Parser):
     # Primary: API responses captured in-flight by CamoufoxTransport.
     captured = _extract_captured_api(html)
     if captured:
-      logger.debug("[vinted] Captured API keys: %s", list(captured.keys()))
+      logger.warning("[vinted] Captured API URLs: %s", list(captured.keys()))
     else:
       logger.warning("[vinted] No captured API responses found in HTML for %s", url)
     item = _extract_item_from_captured_api(html)
