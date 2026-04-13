@@ -171,7 +171,22 @@ class VintedParser(Parser):
     """
     domain = _domain_from_url(url)
 
-    # Try __NEXT_DATA__ first (expected from web-page navigation).
+    # Primary: API responses captured in-flight by CamoufoxTransport.
+    items = _extract_search_items_from_captured_api(html)
+    if items is not None:
+      results: list[ScrapedSearchResult] = []
+      for item in items:
+        result = _item_to_search_result(item, domain)
+        if result is not None:
+          results.append(result)
+      logger.info(
+        "Vinted search (captured API): parsed %d results from %d items",
+        len(results), len(items),
+      )
+      return results
+
+    # Fallback: __NEXT_DATA__ SSR block (not currently present but kept
+    # in case Vinted migrates to Next.js in future).
     items = _extract_search_items_from_next_data(html)
     if items is not None:
       results: list[ScrapedSearchResult] = []
@@ -227,7 +242,13 @@ class VintedParser(Parser):
     canonical ``/items/{id}-{slug}`` URL).
     Fallback: if the response is a JSON API payload, parse it directly.
     """
-    # Try __NEXT_DATA__ first.
+    # Primary: API responses captured in-flight by CamoufoxTransport.
+    item = _extract_item_from_captured_api(html)
+    if item is not None:
+      return _parse_item_detail(item, url)
+
+    # Fallback: __NEXT_DATA__ SSR block (not currently present but kept
+    # in case Vinted migrates to Next.js in future).
     item = _extract_item_from_next_data(html)
     if item is not None:
       return _parse_item_detail(item, url)
@@ -271,6 +292,51 @@ _NEXT_DATA_RE = re.compile(
   r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
   re.DOTALL,
 )
+
+
+def _extract_captured_api(html: str) -> dict[str, str]:
+  """Return the dict of {url: json_body} injected by CamoufoxTransport.
+
+  When Camoufox loads a page it intercepts every ``/api/`` JSON response
+  and injects them as a ``<script id="__CAMOUFOX_CAPTURED_API__">`` block.
+  Returns an empty dict if the block is absent.
+  """
+  with contextlib.suppress(Exception):
+    tree = HTMLParser(html)
+    node = tree.css_first(
+      'script#__CAMOUFOX_CAPTURED_API__[type="application/json"]'
+    )
+    if node is not None:
+      return json.loads(node.text() or "{}")
+  return {}
+
+
+def _extract_item_from_captured_api(html: str) -> dict | None:
+  """Find item detail data in the API responses captured during page load."""
+  captured = _extract_captured_api(html)
+  for url, body in captured.items():
+    if "/api/v2/items/" not in url:
+      continue
+    with contextlib.suppress(Exception):
+      data = json.loads(body)
+      item = data.get("item")
+      if isinstance(item, dict) and item.get("id"):
+        return item
+  return None
+
+
+def _extract_search_items_from_captured_api(html: str) -> list | None:
+  """Find catalog search items in the API responses captured during page load."""
+  captured = _extract_captured_api(html)
+  for url, body in captured.items():
+    if "/api/v2/catalog/items" not in url:
+      continue
+    with contextlib.suppress(Exception):
+      data = json.loads(body)
+      items = data.get("items")
+      if isinstance(items, list):
+        return items
+  return None
 
 
 def _extract_next_data(html: str) -> dict | None:

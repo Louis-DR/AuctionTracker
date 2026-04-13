@@ -346,59 +346,105 @@ class CamoufoxTransport(Transport):
 
     await asyncio.sleep(random.uniform(0.5, 1.5))
 
-    logger.debug("Camoufox navigating to %s", url)
-    await page.goto(
-      url,
-      wait_until="domcontentloaded",
-      timeout=self._timeout_ms,
-    )
+    # Capture JSON API responses that the page's JavaScript issues via
+    # XHR / fetch.  SPAs like Vinted load all data dynamically and never
+    # embed it in the initial HTML, so page.content() alone is useless.
+    # We intercept responses here, then inject them as a script tag so
+    # the parser can read the exact same JSON the browser received.
+    _captured_api: dict[str, str] = {}
 
-    with contextlib.suppress(Exception):
-      await page.wait_for_load_state("networkidle", timeout=10_000)
+    async def _capture_api_response(response) -> None:
+      try:
+        if "/api/" not in response.url:
+          return
+        content_type = response.headers.get("content-type", "")
+        if "json" not in content_type:
+          return
+        if len(_captured_api) >= 20:
+          return
+        body = await response.body()
+        _captured_api[response.url] = body.decode("utf-8", errors="replace")
+      except Exception:
+        pass
 
-    elapsed = time.monotonic() - start_time
-    if elapsed > _STALL_WARNING_THRESHOLD:
-      logger.warning(
-        "Camoufox fetch for %s has been running for %.0fs (navigation phase)",
-        url, elapsed,
+    page.on("response", _capture_api_response)
+    try:
+      logger.debug("Camoufox navigating to %s", url)
+      await page.goto(
+        url,
+        wait_until="domcontentloaded",
+        timeout=self._timeout_ms,
       )
 
-    await self._simulate_human_behavior(page)
-    await self._wait_for_datadome(page)
-    await self._dismiss_cookie_consent(page)
+      with contextlib.suppress(Exception):
+        await page.wait_for_load_state("networkidle", timeout=10_000)
 
-    await asyncio.sleep(random.uniform(0.5, 2.0))
+      elapsed = time.monotonic() - start_time
+      if elapsed > _STALL_WARNING_THRESHOLD:
+        logger.warning(
+          "Camoufox fetch for %s has been running for %.0fs (navigation phase)",
+          url, elapsed,
+        )
 
-    if page.is_closed():
-      raise TransportBlocked(
-        f"Page closed during DataDome handling for {url}",
+      await self._simulate_human_behavior(page)
+      await self._wait_for_datadome(page)
+      await self._dismiss_cookie_consent(page)
+
+      await asyncio.sleep(random.uniform(0.5, 2.0))
+      # Yield once so any pending response-handler coroutines can complete
+      # before we read the captured dict.
+      await asyncio.sleep(0)
+
+      if page.is_closed():
+        raise TransportBlocked(
+          f"Page closed during DataDome handling for {url}",
+          url=url,
+          status_code=403,
+        )
+
+      html = await page.content()
+      elapsed = time.monotonic() - start_time
+      final_url = page.url
+
+      if len(html) < 5000 and await self._is_datadome_challenge(page):
+        raise TransportBlocked(
+          f"Camoufox blocked by DataDome on {url}",
+          url=url,
+          status_code=403,
+        )
+
+      # Inject captured API responses as a parseable script tag.
+      if _captured_api:
+        import json as _json
+        payload = _json.dumps(_captured_api)
+        inject = (
+          f'<script id="__CAMOUFOX_CAPTURED_API__"'
+          f' type="application/json">{payload}</script>'
+        )
+        if "</body>" in html:
+          html = html.replace("</body>", inject + "\n</body>", 1)
+        else:
+          html += "\n" + inject
+        logger.debug(
+          "Camoufox injected %d captured API response(s) for %s",
+          len(_captured_api), url,
+        )
+
+      logger.debug(
+        "Camoufox fetched %s (%d bytes, %.1fs)",
+        url, len(html), elapsed,
+      )
+      return FetchResult(
+        html=html,
         url=url,
-        status_code=403,
+        status_code=200,
+        redirected_url=final_url if final_url != url else None,
+        elapsed_seconds=elapsed,
+        transport_name=self.name,
       )
 
-    html = await page.content()
-    elapsed = time.monotonic() - start_time
-    final_url = page.url
-
-    if len(html) < 5000 and await self._is_datadome_challenge(page):
-      raise TransportBlocked(
-        f"Camoufox blocked by DataDome on {url}",
-        url=url,
-        status_code=403,
-      )
-
-    logger.debug(
-      "Camoufox fetched %s (%d bytes, %.1fs)",
-      url, len(html), elapsed,
-    )
-    return FetchResult(
-      html=html,
-      url=url,
-      status_code=200,
-      redirected_url=final_url if final_url != url else None,
-      elapsed_seconds=elapsed,
-      transport_name=self.name,
-    )
+    finally:
+      page.remove_listener("response", _capture_api_response)
 
   async def fetch(self, url: str, **kwargs) -> FetchResult:
     if self._context is None:
