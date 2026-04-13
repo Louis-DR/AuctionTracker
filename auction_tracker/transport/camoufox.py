@@ -346,28 +346,31 @@ class CamoufoxTransport(Transport):
 
     await asyncio.sleep(random.uniform(0.5, 1.5))
 
-    # Capture JSON API responses that the page's JavaScript issues via
-    # XHR / fetch.  SPAs like Vinted load all data dynamically and never
-    # embed it in the initial HTML, so page.content() alone is useless.
-    # We intercept responses here, then inject them as a script tag so
-    # the parser can read the exact same JSON the browser received.
+    # Intercept JSON API responses issued by the page's JavaScript via
+    # XHR / fetch.  SPAs like Vinted load all data dynamically after
+    # page load, so page.content() alone returns only the HTML shell.
+    # page.route() is synchronous from Playwright's point of view: the
+    # handler MUST resolve before the browser receives the response, so
+    # there is no race condition with page.on("response") async tasks.
+    import json as _json
     _captured_api: dict[str, str] = {}
 
-    async def _capture_api_response(response) -> None:
+    async def _route_api(route) -> None:
+      url_r = route.request.url
       try:
-        if "/api/" not in response.url:
-          return
-        content_type = response.headers.get("content-type", "")
-        if "json" not in content_type:
-          return
-        if len(_captured_api) >= 20:
-          return
-        body = await response.body()
-        _captured_api[response.url] = body.decode("utf-8", errors="replace")
+        response = await route.fetch()
+        with contextlib.suppress(Exception):
+          if len(_captured_api) < 20:
+            ct = (response.headers or {}).get("content-type", "")
+            if "json" in ct:
+              body = await response.body()
+              _captured_api[url_r] = body.decode("utf-8", errors="replace")
+        await route.fulfill(response=response)
       except Exception:
-        pass
+        with contextlib.suppress(Exception):
+          await route.continue_()
 
-    page.on("response", _capture_api_response)
+    await page.route("**/api/**", _route_api)
     try:
       logger.debug("Camoufox navigating to %s", url)
       await page.goto(
@@ -391,9 +394,6 @@ class CamoufoxTransport(Transport):
       await self._dismiss_cookie_consent(page)
 
       await asyncio.sleep(random.uniform(0.5, 2.0))
-      # Yield once so any pending response-handler coroutines can complete
-      # before we read the captured dict.
-      await asyncio.sleep(0)
 
       if page.is_closed():
         raise TransportBlocked(
@@ -413,9 +413,9 @@ class CamoufoxTransport(Transport):
           status_code=403,
         )
 
-      # Inject captured API responses as a parseable script tag.
+      # Inject captured API responses as a parseable script tag so that
+      # SPA parsers (e.g. Vinted) can extract the XHR data they need.
       if _captured_api:
-        import json as _json
         payload = _json.dumps(_captured_api)
         inject = (
           f'<script id="__CAMOUFOX_CAPTURED_API__"'
@@ -444,7 +444,8 @@ class CamoufoxTransport(Transport):
       )
 
     finally:
-      page.remove_listener("response", _capture_api_response)
+      with contextlib.suppress(Exception):
+        await page.unroute("**/api/**", _route_api)
 
   async def fetch(self, url: str, **kwargs) -> FetchResult:
     if self._context is None:
