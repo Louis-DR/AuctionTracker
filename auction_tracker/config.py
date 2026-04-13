@@ -52,6 +52,13 @@ class LoggingConfig(BaseModel):
   """Logging configuration."""
   level: str = "INFO"
   file: Path | None = Field(default=Path("data/auction_tracker.log"))
+  log_dir: Path | None = Field(
+    default=Path("data/logs"),
+    description=(
+      "Directory for per-website and shared log files. "
+      "Set to null to disable per-website splitting."
+    ),
+  )
   max_bytes: int = Field(default=10 * 1024 * 1024, description="Max log file size before rotation")
   backup_count: int = Field(default=5, description="Number of rotated log files to keep")
 
@@ -259,6 +266,7 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
   ),
   "vinted": WebsiteConfig(
     transport=TransportKind.HTTP,
+    fallback_transport=TransportKind.CAMOUFOX,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
     request_delay=3.0,
     preferred_domain="vinted.fr",
@@ -277,13 +285,13 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     request_delay=3.0,
   ),
   "ricardo": WebsiteConfig(
-    transport=TransportKind.HTTP,
+    transport=TransportKind.CAMOUFOX,
     fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
     request_delay=3.0,
   ),
   "subito": WebsiteConfig(
-    transport=TransportKind.HTTP,
+    transport=TransportKind.CAMOUFOX,
     fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
     request_delay=3.0,

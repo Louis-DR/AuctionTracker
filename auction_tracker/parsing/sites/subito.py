@@ -27,6 +27,7 @@ from urllib.parse import quote_plus, urlencode
 
 from auction_tracker.parsing.base import (
   Parser,
+  ParserBlocked,
   ParserCapabilities,
   ParserRegistry,
   check_html_for_blocking,
@@ -144,7 +145,10 @@ class SubitoParser(Parser):
     check_html_for_blocking(html, url)
     payload = _load_next_data(html)
     if payload is None:
-      raise ValueError("No __NEXT_DATA__ script found on Subito page")
+      raise ParserBlocked(
+        "No __NEXT_DATA__ script — likely a JS challenge page",
+        url=url,
+      )
 
     try:
       items_list = (
@@ -195,7 +199,10 @@ class SubitoParser(Parser):
     check_html_for_blocking(html, url)
     payload = _load_next_data(html)
     if payload is None:
-      raise ValueError("No __NEXT_DATA__ script found on Subito page")
+      raise ParserBlocked(
+        "No __NEXT_DATA__ script — likely a JS challenge page",
+        url=url,
+      )
 
     page_props = payload.get("props", {}).get("pageProps", {})
     item = None

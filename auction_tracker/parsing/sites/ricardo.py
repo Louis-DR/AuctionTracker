@@ -26,6 +26,7 @@ from selectolax.parser import HTMLParser
 
 from auction_tracker.parsing.base import (
   Parser,
+  ParserBlocked,
   ParserCapabilities,
   ParserRegistry,
   check_html_for_blocking,
@@ -232,6 +233,11 @@ class RicardoParser(Parser):
         title = meta_title.group(1).strip()
 
     if not title:
+      if _looks_like_challenge_page(html):
+        raise ParserBlocked(
+          "Ricardo returned a challenge page (DataDome or similar)",
+          url=url,
+        )
       raise ValueError("No listing title found on page")
 
     external_id = self.extract_external_id(url)
@@ -307,6 +313,24 @@ def _parse_ricardo_card_prices(
       buy_now = _parse_chf_amount(loose.group(1))
 
   return current, buy_now, listing_type
+
+
+def _looks_like_challenge_page(html: str) -> bool:
+  """Detect DataDome / Captcha challenge pages that bypass generic blocking."""
+  lower = html.lower()
+  markers = (
+    "datadome",
+    "captcha-delivery",
+    "geo.captcha-delivery",
+    "dd.js",
+    "dd_tags",
+    "interstitial",
+  )
+  if len(html) < 50_000 and any(marker in lower for marker in markers):
+    return True
+  if len(html) < 5_000 and "<h1" not in lower:
+    return True
+  return False
 
 
 def _extract_ricardo_seller(tree: HTMLParser, html: str) -> ScrapedSeller | None:
