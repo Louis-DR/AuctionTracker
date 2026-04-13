@@ -253,7 +253,10 @@ class VintedParser(Parser):
     check_html_for_blocking(html, url)
     # Log a snippet so we can see what the page actually looks like.
     snippet = html[:800].replace("\n", " ").strip()
-    logger.warning("Vinted: unrecognised item page content (first 800 chars): %s", snippet)
+    logger.warning(
+      "[vinted] Unrecognised item page content (first 800 chars): %s",
+      snippet,
+    )
     raise ValueError("Could not extract Vinted item data from HTML or JSON response")
 
 
@@ -289,7 +292,7 @@ def _extract_item_from_next_data(html: str) -> dict | None:
   """
   data = _extract_next_data(html)
   if data is None:
-    logger.debug("Vinted: no __NEXT_DATA__ block found in HTML")
+    logger.debug("[vinted] No __NEXT_DATA__ block found in HTML")
     return None
 
   props = data.get("props") or {}
@@ -314,7 +317,7 @@ def _extract_item_from_next_data(html: str) -> dict | None:
 
   # Log the structure so we can identify the correct path on failure.
   logger.warning(
-    "Vinted: __NEXT_DATA__ found but item not at any known path. "
+    "[vinted] __NEXT_DATA__ found but item not at any known path. "
     "props keys=%s  pageProps keys=%s  initialState keys=%s",
     list(props.keys()),
     list(page_props.keys()),
@@ -331,7 +334,7 @@ def _extract_search_items_from_next_data(html: str) -> list | None:
   """
   data = _extract_next_data(html)
   if data is None:
-    logger.debug("Vinted: no __NEXT_DATA__ block found in catalog HTML")
+    logger.debug("[vinted] No __NEXT_DATA__ block found in catalog HTML")
     return None
 
   props = data.get("props") or {}
@@ -356,7 +359,7 @@ def _extract_search_items_from_next_data(html: str) -> list | None:
       return candidate
 
   logger.warning(
-    "Vinted: __NEXT_DATA__ found but catalog items not at any known path. "
+    "[vinted] __NEXT_DATA__ found but catalog items not at any known path. "
     "props keys=%s  pageProps keys=%s  initialState keys=%s",
     list(props.keys()),
     list(page_props.keys()),
