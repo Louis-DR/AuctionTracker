@@ -337,6 +337,29 @@ opacity: 0.8;
 </article>
 {% endif %}
 
+<!-- Classifier result -->
+{% if classifier_info %}
+{% set cl_score = classifier_info.get("classifier_score") %}
+{% set cl_accepted = classifier_info.get("classifier_accepted") %}
+{% set cl_top = classifier_info.get("classifier_top_class") %}
+<h2>Classifier</h2>
+<article style="padding: 0.75rem 1rem;">
+  <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+    {% if cl_accepted == "1" %}
+    <span class="badge badge-active" style="font-size: 0.9rem; padding: 0.25em 0.75em;">Accepted</span>
+    {% else %}
+    <span class="badge badge-unsold" style="font-size: 0.9rem; padding: 0.25em 0.75em;">Rejected</span>
+    {% endif %}
+    {% if cl_score %}
+    <span>Score: <strong>{{ "%.1f"|format(cl_score|float * 100) }}%</strong></span>
+    {% endif %}
+    {% if cl_top %}
+    <span>Top class: <strong>{{ cl_top }}</strong></span>
+    {% endif %}
+  </div>
+</article>
+{% endif %}
+
 <!-- Attributes -->
 {% if attributes %}
 <h2>Attributes</h2>

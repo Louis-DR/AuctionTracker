@@ -426,11 +426,19 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         reference_lines["estimate_high"] = float(listing.estimate_high)
 
       source_prefix = "source_search:"
+      _classifier_keys = frozenset({
+        "classifier_score",
+        "classifier_accepted",
+        "classifier_top_class",
+      })
       source_searches = []
       attributes_list = []
+      classifier_info: dict[str, str] = {}
       for attr in listing.attributes:
         if attr.attribute_name.startswith(source_prefix):
           source_searches.append(attr.attribute_name[len(source_prefix):])
+        elif attr.attribute_name in _classifier_keys:
+          classifier_info[attr.attribute_name] = attr.attribute_value
         else:
           attributes_list.append({
             "name": attr.attribute_name,
@@ -441,6 +449,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         "listing_detail.html",
         listing=listing,
         attributes=attributes_list,
+        classifier_info=classifier_info,
         source_searches=source_searches,
         bid_chart_data=bid_chart_data,
         snapshot_chart_data=snapshot_chart_data,
