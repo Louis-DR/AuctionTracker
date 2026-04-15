@@ -222,9 +222,9 @@
   border-radius: 6px;
   transition: width 0.6s ease-in-out;
 }
-.live-loop-bar.search { background: #0074d9; }
-.live-loop-bar.fetch { background: #2ecc40; }
-.live-loop-bar.watch { background: #ff851b; }
+.live-loop-bar.search { background: var(--color-task-search); }
+.live-loop-bar.fetch  { background: var(--color-task-fetch);  }
+.live-loop-bar.watch  { background: var(--color-task-watch);  }
 .live-loop-bar.idle { background: var(--pico-muted-color, #999); width: 100%; opacity: 0.2; }
 .live-loop-bar.sleeping { background: var(--pico-muted-color, #999); width: 100%; opacity: 0.15; }
 .live-loop-text {
@@ -424,14 +424,19 @@
   <div class="chart-grid-item chart-tab-group" id="group-activity">
     <h2>Activity &amp; Requests (<span class="ops-hours-label-text">{{ range_label }}</span>)</h2>
     <div class="chart-tab-nav" data-group="activity">
-      <button class="active" data-panel="activity-time">Over Time</button>
+      <button class="active" data-panel="activity-time">Overview</button>
+      <button data-panel="activity-inflow">Inflow / Outflow</button>
       <button data-panel="activity-website">Per Website</button>
       <button data-panel="activity-type">By Type</button>
-      <button data-panel="activity-completion">Completion</button>
     </div>
     <div class="chart-tab-panel active" id="panel-activity-time">
       <div class="chart-container">
         <canvas id="activityChart" height="220"></canvas>
+      </div>
+    </div>
+    <div class="chart-tab-panel" id="panel-activity-inflow">
+      <div class="chart-container">
+        <canvas id="completionChart" height="220"></canvas>
       </div>
     </div>
     <div class="chart-tab-panel" id="panel-activity-website">
@@ -442,11 +447,6 @@
     <div class="chart-tab-panel" id="panel-activity-type">
       <div class="chart-container">
         <canvas id="requestTypesChart" height="220"></canvas>
-      </div>
-    </div>
-    <div class="chart-tab-panel" id="panel-activity-completion">
-      <div class="chart-container">
-        <canvas id="completionChart" height="220"></canvas>
       </div>
     </div>
   </div>
@@ -487,8 +487,8 @@
     <h2>Scraper load (<span class="ops-hours-label-text">{{ range_label }}</span>)</h2>
     <div class="chart-tab-nav" data-group="scraper-load">
       <button class="active" data-panel="scraper-load-chart">Load</button>
-      <button data-panel="scraper-fetch-queue">Fetch queue</button>
       <button data-panel="scraper-search-queue">Search queue</button>
+      <button data-panel="scraper-fetch-queue">Fetch queue</button>
       <button data-panel="scraper-watch-queue">Watch queue</button>
       <button data-panel="scraper-late-watch">Late watches</button>
     </div>
@@ -497,14 +497,14 @@
         <canvas id="loadChart" height="220"></canvas>
       </div>
     </div>
-    <div class="chart-tab-panel" id="panel-scraper-fetch-queue">
-      <div class="chart-container">
-        <canvas id="fetchQueueChart" height="220"></canvas>
-      </div>
-    </div>
     <div class="chart-tab-panel" id="panel-scraper-search-queue">
       <div class="chart-container">
         <canvas id="searchQueueChart" height="220"></canvas>
+      </div>
+    </div>
+    <div class="chart-tab-panel" id="panel-scraper-fetch-queue">
+      <div class="chart-container">
+        <canvas id="fetchQueueChart" height="220"></canvas>
       </div>
     </div>
     <div class="chart-tab-panel" id="panel-scraper-watch-queue">
@@ -708,28 +708,9 @@ const RANGE_LABEL = '{{ range_label }}';
 const GRANULARITY = '{{ granularity }}';
 const LATE_WATCH_THRESHOLD = {{ late_watch_threshold }};
 
-// Brand-accurate colors — keys match the lowercase website names in the DB.
-const WEBSITE_BRAND_COLORS = {
-  "ebay":           "#ffbd14",
-  "catawiki":       "#0033ff",
-  "drouot":         "#dc2926",
-  "interencheres":  "#ef6060",
-  "invaluable":     "#636569",
-  "liveauctioneers":"#0097ba",
-  "leboncoin":      "#ec5a13",
-  "yahoo_japan":    "#7d2eff",
-  "gazette_drouot": "#0b2230",
-  "vinted":         "#057a84",
-  "todocoleccion":  "#692084",
-  "kleinanzeigen":  "#b5e941",
-  "ricardo":        "#ef7310",
-  "subito":         "#f9423a",
-  "marktplaats":    "#eda566",
-};
-// Fallback palette for any unknown website.
-const FALLBACK_COLORS = [
-  '#06b6d4', '#f59e0b', '#7c3aed', '#2ecc40', '#aaa',
-];
+// Colors are centralised in PALETTE (defined in _colors.html, loaded by base.html).
+const WEBSITE_BRAND_COLORS = PALETTE.websites;
+const FALLBACK_COLORS = PALETTE.fallback;
 const _fallbackIndex = {};
 
 function setText(id, value) {
@@ -845,15 +826,15 @@ const barOpts = (stacked) => ({
   plugins: { legend: { position: 'top', display: !!stacked } },
 });
 
-// -- Activity over time (line) ---
+// -- Overview: requests + queue depths (line) --
 const activityChart = new Chart(document.getElementById('activityChart'), {
   type: 'line',
   data: {
     labels: initialShortLabels,
     datasets: [
-      { label: 'New Listings',  data: initialTimeseries.new_listings, borderColor: '#2ecc40', backgroundColor: 'rgba(46,204,64,0.1)',   fill: true, tension: 0.3 },
-      { label: 'Completed',     data: initialTimeseries.completed,    borderColor: '#0074d9', backgroundColor: 'rgba(0,116,217,0.1)',    fill: true, tension: 0.3 },
-      { label: 'Requests',      data: initialTimeseries.requests,     borderColor: '#aaa',    backgroundColor: 'rgba(170,170,170,0.06)', fill: true, tension: 0.3, borderDash: [4,4] },
+      { label: 'Requests',    data: initialTimeseries.requests,          borderColor: PALETTE.chart.requests,   backgroundColor: 'rgba(170,170,170,0.06)', fill: true,  tension: 0.3, borderDash: [4,4], pointRadius: 2 },
+      { label: 'Fetch Queue', data: initialTimeseries.fetch_queue_total, borderColor: PALETTE.chart.fetch_queue, backgroundColor: 'rgba(255,133,27,0.1)',  fill: false, tension: 0.3, pointRadius: 2, spanGaps: true },
+      { label: 'Watch Queue', data: initialTimeseries.watch_queue_total, borderColor: PALETTE.chart.watch_queue, backgroundColor: 'rgba(0,116,217,0.1)',   fill: false, tension: 0.3, pointRadius: 2, spanGaps: true },
     ],
   },
   options: lineOpts(''),
@@ -880,30 +861,37 @@ const requestsChart = new Chart(document.getElementById('requestsChart'), {
   options: lineOpts('Requests'),
 });
 
-// -- Requests by type (horizontal bar, mirrors "per website") --
-const reqTypeLabels0 = Object.keys(initialReqTypeData);
+// -- Requests by type (line time series, one line per type) --
+const TYPE_COLORS = PALETTE.task;
+function buildRequestsByTypeDatasets(byType) {
+  return Object.entries(byType).map(([type, values]) => ({
+    label: type.charAt(0).toUpperCase() + type.slice(1),
+    data: values,
+    borderColor: TYPE_COLORS[type] || '#aaa',
+    backgroundColor: 'transparent',
+    tension: 0.3,
+    pointRadius: 2,
+    spanGaps: true,
+  }));
+}
 const requestTypesChart = new Chart(document.getElementById('requestTypesChart'), {
-  type: 'bar',
+  type: 'line',
   data: {
-    labels: reqTypeLabels0.map(l => l.charAt(0).toUpperCase() + l.slice(1)),
-    datasets: [{
-      label: 'Requests',
-      data: reqTypeLabels0.map(k => initialReqTypeData[k]),
-      backgroundColor: ['#2ecc40', '#0074d9', '#ff851b'],
-      borderRadius: 4,
-    }],
+    labels: initialShortLabels,
+    datasets: buildRequestsByTypeDatasets(initialTimeseries.requests_by_type || {}),
   },
-  options: { ...barOpts(false), indexAxis: 'y' },
+  options: lineOpts('Requests'),
 });
 
-// -- Completion status over time (sold vs unsold only) --
+// -- Inflow / Outflow: new listings discovered vs sold/unsold outcomes --
 const completionChart = new Chart(document.getElementById('completionChart'), {
   type: 'line',
   data: {
     labels: initialShortLabels,
     datasets: [
-      { label: 'Sold',   data: initialTimeseries.sold,   borderColor: '#2ecc40', backgroundColor: 'rgba(46,204,64,0.15)',  fill: true, tension: 0.3 },
-      { label: 'Unsold', data: initialTimeseries.unsold, borderColor: '#ff4136', backgroundColor: 'rgba(255,65,54,0.15)', fill: true, tension: 0.3 },
+      { label: 'New Listings', data: initialTimeseries.new_listings, borderColor: PALETTE.chart.new_listings, backgroundColor: 'rgba(127,219,255,0.12)', fill: true,  tension: 0.3, pointRadius: 2 },
+      { label: 'Sold',         data: initialTimeseries.sold,         borderColor: PALETTE.status.sold,        backgroundColor: 'rgba(46,204,64,0.12)',   fill: true,  tension: 0.3, pointRadius: 2 },
+      { label: 'Unsold',       data: initialTimeseries.unsold,       borderColor: PALETTE.status.unsold,      backgroundColor: 'rgba(255,65,54,0.12)',   fill: true,  tension: 0.3, pointRadius: 2 },
     ],
   },
   options: lineOpts(''),
@@ -920,7 +908,7 @@ const errorsChart = new Chart(document.getElementById('errorsChart'), {
         label: 'Error Count',
         data: initialTimeseries.errors,
         backgroundColor: 'rgba(255,65,54,0.55)',
-        borderColor: '#ff4136',
+        borderColor: PALETTE.chart.errors,
         borderWidth: 1,
         borderRadius: 2,
         yAxisID: 'yCount',
@@ -929,7 +917,7 @@ const errorsChart = new Chart(document.getElementById('errorsChart'), {
         type: 'line',
         label: 'Error Rate (%)',
         data: initialTimeseries.error_rate,
-        borderColor: '#ff851b',
+        borderColor: PALETTE.chart.error_rate,
         backgroundColor: 'rgba(255,133,27,0.12)',
         fill: false,
         tension: 0.3,
@@ -1001,7 +989,7 @@ const errorsRateChart = new Chart(document.getElementById('errorsRateChart'), {
 });
 
 // -- Errors by source over time (stacked bar) --
-const sourceColors = ['#ff4136','#ff851b','#b10dc9','#0074d9','#2ecc40','#aaa'];
+const sourceColors = [PALETTE.chart.errors, PALETTE.chart.error_rate, PALETTE.status.relisted, PALETTE.chart.total, PALETTE.chart.accepted, PALETTE.status.cancelled];
 let sourceColorIdx = 0;
 const sourceColorMap = {};
 function getSourceColor(src) {
@@ -1122,9 +1110,9 @@ const lateWatchChart = new Chart(document.getElementById('lateWatchChart'), {
 // Search & Classification charts (all-time, not windowed)
 // ---------------------------------------------------------------
 const QUERY_COLORS = [
-  '#0074d9','#2ecc40','#ff851b','#ff4136','#b10dc9',
-  '#7c3aed','#06b6d4','#d4af37','#ec5a13','#636569',
-  '#17a2b8','#f59e0b','#dc2926','#0097ba','#410093',
+  PALETTE.status.active,    PALETTE.status.sold,     PALETTE.chart.error_rate, PALETTE.chart.errors,    PALETTE.status.relisted,
+  PALETTE.type.auction,     PALETTE.type.hybrid,     '#d4af37',                 PALETTE.websites.leboncoin, PALETTE.websites.invaluable,
+  '#17a2b8',                PALETTE.type.buy_now,    PALETTE.websites.drouot,   PALETTE.websites.liveauctioneers, '#410093',
 ];
 
 // -- Search: New listings over time (line) --
@@ -1278,9 +1266,9 @@ let searchStatusBarVP;
       data: {
         labels: [],
         datasets: [
-          { label: 'Active', data: [], backgroundColor: '#2ecc40', stack: 's' },
-          { label: 'Sold',   data: [], backgroundColor: '#0074d9', stack: 's' },
-          { label: 'Unsold', data: [], backgroundColor: '#ff4136', stack: 's' },
+          { label: 'Active', data: [], backgroundColor: PALETTE.status.active, stack: 's' },
+          { label: 'Sold',   data: [], backgroundColor: PALETTE.status.sold,   stack: 's' },
+          { label: 'Unsold', data: [], backgroundColor: PALETTE.status.unsold, stack: 's' },
         ],
       },
       options: {
@@ -1374,7 +1362,7 @@ let searchRejectionRawData;
     const rates = items.map(d => d.rate);
     ch.data.datasets[0].data = rates;
     ch.data.datasets[0].backgroundColor = rates.map(
-      r => r > 70 ? '#ff4136' : r > 40 ? '#ff851b' : '#2ecc40'
+      r => r > 50 ? PALETTE.chart.errors : r > 20 ? PALETTE.chart.error_rate : PALETTE.chart.accepted
     );
   });
 })();
@@ -1397,8 +1385,8 @@ let classHistogramChart;
     data: {
       labels: hist.bin_labels,
       datasets: [
-        { label: 'Accepted', data: hist.accepted, backgroundColor: 'rgba(46,204,64,0.6)', borderColor: '#2ecc40', borderWidth: 1, barPercentage: 1, categoryPercentage: 1 },
-        { label: 'Rejected', data: hist.rejected, backgroundColor: 'rgba(255,65,54,0.5)', borderColor: '#ff4136', borderWidth: 1, barPercentage: 1, categoryPercentage: 1 },
+        { label: 'Accepted', data: hist.accepted, backgroundColor: 'rgba(46,204,64,0.6)', borderColor: PALETTE.chart.accepted, borderWidth: 1, barPercentage: 1, categoryPercentage: 1 },
+        { label: 'Rejected', data: hist.rejected, backgroundColor: 'rgba(255,65,54,0.5)', borderColor: PALETTE.chart.rejected, borderWidth: 1, barPercentage: 1, categoryPercentage: 1 },
       ],
     },
     options: {
@@ -1526,7 +1514,7 @@ function refreshClassCategoriesData(categories, startIndex) {
           label: 'Accepted',
           data: [],
           backgroundColor: 'rgba(46,204,64,0.75)',
-          borderColor: '#2ecc40',
+          borderColor: PALETTE.chart.accepted,
           borderWidth: 1,
           borderRadius: 3,
           stack: 'cats',
@@ -1535,7 +1523,7 @@ function refreshClassCategoriesData(categories, startIndex) {
           label: 'Rejected',
           data: [],
           backgroundColor: 'rgba(255,65,54,0.65)',
-          borderColor: '#ff4136',
+          borderColor: PALETTE.chart.rejected,
           borderWidth: 1,
           borderRadius: 3,
           stack: 'cats',
@@ -1663,9 +1651,9 @@ let classTimeseriesChart;
     data: {
       labels: ts.labels,
       datasets: [
-        { label: 'Total',    data: ts.total,    borderColor: '#0074d9', backgroundColor: 'rgba(0,116,217,0.1)',  fill: true, tension: 0.3 },
-        { label: 'Accepted', data: ts.accepted, borderColor: '#2ecc40', backgroundColor: 'rgba(46,204,64,0.1)', fill: true, tension: 0.3 },
-        { label: 'Rejected', data: ts.rejected, borderColor: '#ff4136', backgroundColor: 'rgba(255,65,54,0.1)', fill: true, tension: 0.3 },
+        { label: 'Total',    data: ts.total,    borderColor: PALETTE.chart.total,    backgroundColor: 'rgba(0,116,217,0.1)',  fill: true, tension: 0.3 },
+        { label: 'Accepted', data: ts.accepted, borderColor: PALETTE.chart.accepted, backgroundColor: 'rgba(46,204,64,0.1)', fill: true, tension: 0.3 },
+        { label: 'Rejected', data: ts.rejected, borderColor: PALETTE.chart.rejected, backgroundColor: 'rgba(255,65,54,0.1)', fill: true, tension: 0.3 },
       ],
     },
     options: lineOpts('Classifications'),
@@ -1679,30 +1667,29 @@ function updateCharts(data) {
   const ts = data.timeseries_data || {};
   const shortLabels = (ts.labels || []).map(shortLabel);
 
-  // Activity over time
+  // Overview: requests + queue depths
   activityChart.data.labels = shortLabels;
-  activityChart.data.datasets[0].data = ts.new_listings || [];
-  activityChart.data.datasets[1].data = ts.completed    || [];
-  activityChart.data.datasets[2].data = ts.requests     || [];
+  activityChart.data.datasets[0].data = ts.requests           || [];
+  activityChart.data.datasets[1].data = ts.fetch_queue_total  || [];
+  activityChart.data.datasets[2].data = ts.watch_queue_total  || [];
   activityChart.update('none');
+
+  // Inflow / Outflow: new listings, sold, unsold
+  completionChart.data.labels = shortLabels;
+  completionChart.data.datasets[0].data = ts.new_listings || [];
+  completionChart.data.datasets[1].data = ts.sold         || [];
+  completionChart.data.datasets[2].data = ts.unsold       || [];
+  completionChart.update('none');
 
   // Requests per website (time series)
   requestsChart.data.labels = shortLabels;
   requestsChart.data.datasets = buildRequestsByWebsiteDatasets(ts.requests_by_website || {});
   requestsChart.update('none');
 
-  // Requests by type
-  const rtData = data.request_type_counts || {};
-  const rtLabels = Object.keys(rtData);
-  requestTypesChart.data.labels = rtLabels.map(l => l.charAt(0).toUpperCase() + l.slice(1));
-  requestTypesChart.data.datasets[0].data = rtLabels.map(k => rtData[k]);
+  // Requests by type (time series)
+  requestTypesChart.data.labels = shortLabels;
+  requestTypesChart.data.datasets = buildRequestsByTypeDatasets(ts.requests_by_type || {});
   requestTypesChart.update('none');
-
-  // Completion status (sold / unsold only)
-  completionChart.data.labels = shortLabels;
-  completionChart.data.datasets[0].data = ts.sold   || [];
-  completionChart.data.datasets[1].data = ts.unsold || [];
-  completionChart.update('none');
 
   // Errors over time (combo: count bar + rate line)
   errorsChart.data.labels = shortLabels;
@@ -1796,7 +1783,7 @@ function updateCharts(data) {
       const rates = items.map(d => d.rate);
       ch.data.datasets[0].data = rates;
       ch.data.datasets[0].backgroundColor = rates.map(
-        r => r > 70 ? '#ff4136' : r > 40 ? '#ff851b' : '#2ecc40'
+        r => r > 50 ? PALETTE.chart.errors : r > 20 ? PALETTE.chart.error_rate : PALETTE.chart.accepted
       );
     });
   }
@@ -2065,7 +2052,7 @@ function renderWorkerBars(workers, nowMs) {
   for (const name of names) {
     const worker = workers[name];
     const state = worker.state || 'idle';
-    const color = WEBSITE_BRAND_COLORS[name] || '#888';
+    const color = WEBSITE_BRAND_COLORS[name] || PALETTE.fallback[0];
     let barClass = 'live-loop-bar';
     let barStyle = '';
     let textClass = 'live-loop-text';

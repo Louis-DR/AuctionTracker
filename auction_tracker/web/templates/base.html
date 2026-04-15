@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}AuctionTracker{% endblock %}</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  {% include "_colors.html" %}
   <style>
     /* Stats cards */
     .stat-number {
@@ -32,16 +33,16 @@
       letter-spacing: 0.03em;
       white-space: nowrap;
     }
-    .badge-active   { background: #2ecc40; color: #fff; }
-    .badge-sold     { background: #0074d9; color: #fff; }
-    .badge-unsold   { background: #ff4136; color: #fff; }
-    .badge-upcoming { background: #ffdc00; color: #333; }
-    .badge-cancelled { background: #aaa; color: #fff; }
-    .badge-relisted { background: #b10dc9; color: #fff; }
-    .badge-unknown  { background: #ddd; color: #666; }
-    .badge-auction  { background: #7c3aed; color: #fff; }
-    .badge-buy_now  { background: #f59e0b; color: #fff; }
-    .badge-hybrid   { background: #06b6d4; color: #fff; }
+    .badge-active    { background: var(--color-active);       color: #fff; }
+    .badge-sold      { background: var(--color-sold);         color: #fff; }
+    .badge-unsold    { background: var(--color-unsold);       color: #fff; }
+    .badge-upcoming  { background: var(--color-upcoming);     color: #333; }
+    .badge-cancelled { background: var(--color-cancelled);    color: #fff; }
+    .badge-relisted  { background: var(--color-relisted);     color: #fff; }
+    .badge-unknown   { background: var(--color-unknown);      color: #666; }
+    .badge-auction   { background: var(--color-type-auction); color: #fff; }
+    .badge-buy_now   { background: var(--color-type-buy-now); color: #fff; }
+    .badge-hybrid    { background: var(--color-type-hybrid);  color: #fff; }
 
     /* Image gallery */
     .image-gallery {

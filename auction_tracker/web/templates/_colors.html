@@ -1,0 +1,91 @@
+{#
+  Central color palette — edit this single file to change any color across the
+  whole web UI. The CSS custom properties drive all badge and inline styles;
+  window.PALETTE drives every Chart.js dataset and JS-rendered element.
+#}
+<style>
+  :root {
+    /* ---- Listing lifecycle status ---- */
+    --color-active:    #0074d9;
+    --color-sold:      #2ecc40;
+    --color-unsold:    #ff4136;
+    --color-upcoming:  #ffdc00;
+    --color-cancelled: #aaa;
+    --color-relisted:  #b10dc9;
+    --color-unknown:   #ddd;
+
+    /* ---- Sale type badges ---- */
+    --color-type-auction: #7c3aed;
+    --color-type-buy-now: #f59e0b;
+    --color-type-hybrid:  #06b6d4;
+
+    /* ---- Worker task types (loop bars) ---- */
+    --color-task-search: #0074d9;
+    --color-task-fetch:  #2ecc40;
+    --color-task-watch:  #ff851b;
+  }
+</style>
+<script>
+/* Central color palette — referenced by every chart and badge. */
+window.PALETTE = {
+  /* Listing lifecycle status */
+  status: {
+    active:    '#0074d9',
+    sold:      '#2ecc40',
+    unsold:    '#ff4136',
+    upcoming:  '#ffdc00',
+    cancelled: '#aaa',
+    relisted:  '#b10dc9',
+    unknown:   '#ddd',
+  },
+  /* Sale type badges */
+  type: {
+    auction: '#7c3aed',
+    buy_now: '#f59e0b',
+    hybrid:  '#06b6d4',
+  },
+  /* Semantic chart colors (not tied to listing status) */
+  chart: {
+    requests:     '#aaa',
+    errors:       '#ff4136',
+    error_rate:   '#ff851b',
+    new_listings: '#7fdbff',
+    fetch_queue:  '#ff851b',
+    watch_queue:  '#0074d9',
+    accepted:     '#2ecc40',
+    rejected:     '#ff4136',
+    total:        '#0074d9',
+    auto_bid:     '#f59e0b',
+    bid_line:     '#7c3aed',
+    estimate:     '#0074d9',
+    reserve:      '#ff4136',
+    spending:     '#0074d9',
+  },
+  /* Worker task type colors */
+  task: {
+    search: '#0074d9',
+    fetch:  '#2ecc40',
+    watch:  '#ff851b',
+  },
+  /* Website / brand colors — keys match lowercase DB names */
+  websites: {
+    ebay:           '#ffbd14',
+    catawiki:       '#0033ff',
+    drouot:         '#dc2926',
+    interencheres:  '#ef6060',
+    invaluable:     '#636569',
+    liveauctioneers:'#0097ba',
+    leboncoin:      '#ec5a13',
+    yahoo_japan:    '#7d2eff',
+    gazette_drouot: '#0b2230',
+    vinted:         '#057a84',
+    todocoleccion:  '#692084',
+    kleinanzeigen:  '#b5e941',
+    ricardo:        '#ef7310',
+    subito:         '#f9423a',
+    marktplaats:    '#eda566',
+  },
+  /* Fallback palette for unknown websites */
+  fallback: ['#06b6d4', '#f59e0b', '#7c3aed', '#aaa'],
+};
+</script>

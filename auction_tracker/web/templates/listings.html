@@ -424,24 +424,8 @@
     var context = document.getElementById("price-history-chart").getContext("2d");
     var chartInstance = null;
 
-    // Website color mapping — keys match the lowercase names stored in the DB.
-    var websiteColors = {
-      "ebay":           "#ffbd14",
-      "catawiki":       "#0033ff",
-      "drouot":         "#dc2926",
-      "interencheres":  "#ef6060",
-      "invaluable":     "#636569",
-      "liveauctioneers":"#0097ba",
-      "leboncoin":      "#ec5a13",
-      "yahoo_japan":    "#7d2eff",
-      "gazette_drouot": "#0b2230",
-      "vinted":         "#057a84",
-      "todocoleccion":  "#692084",
-      "kleinanzeigen":  "#b5e941",
-      "ricardo":        "#ef7310",
-      "subito":         "#f9423a",
-      "marktplaats":    "#eda566",
-    };
+    // Website color mapping — defined centrally in PALETTE (loaded via base.html).
+    var websiteColors = PALETTE.websites;
 
     // Calculate min/max dates and prices from all data.
     var allPoints = priceHistoryData.sold.concat(priceHistoryData.active);
@@ -566,7 +550,7 @@
     // Build datasets: one per website for sold listings.
     var datasets = [];
     Object.keys(soldByWebsite).sort().forEach(function(websiteName) {
-      var color = websiteColors[websiteName] || "#6c757d";
+      var color = websiteColors[websiteName] || PALETTE.fallback[0];
       datasets.push({
         label: websiteName + " (sold)",
         data: soldByWebsite[websiteName],
@@ -583,7 +567,7 @@
 
     // Add active listings datasets (shown on the right side).
     Object.keys(activeByWebsite).sort().forEach(function(websiteName) {
-      var color = websiteColors[websiteName] || "#6c757d";
+      var color = websiteColors[websiteName] || PALETTE.fallback[0];
       datasets.push({
         label: websiteName + " (active)",
         data: activeByWebsite[websiteName],

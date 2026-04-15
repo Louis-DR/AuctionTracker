@@ -13,19 +13,19 @@
   </article>
   <article>
     <p class="stat-label">Active</p>
-    <p class="stat-number" style="color: #2ecc40;">
+    <p class="stat-number" style="color: var(--color-active);">
       {{ status_counts.get(ListingStatus.ACTIVE, 0) }}
     </p>
   </article>
   <article>
     <p class="stat-label">Sold</p>
-    <p class="stat-number" style="color: #0074d9;">
+    <p class="stat-number" style="color: var(--color-sold);">
       {{ status_counts.get(ListingStatus.SOLD, 0) }}
     </p>
   </article>
   <article>
     <p class="stat-label">Unsold</p>
-    <p class="stat-number" style="color: #ff4136;">
+    <p class="stat-number" style="color: var(--color-unsold);">
       {{ status_counts.get(ListingStatus.UNSOLD, 0) }}
     </p>
   </article>

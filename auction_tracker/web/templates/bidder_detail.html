@@ -23,11 +23,11 @@
   </article>
   <article>
     <p class="stat-label">Items Won</p>
-    <p class="stat-number" style="color: #2ecc40;">{{ won_listings|length }}</p>
+    <p class="stat-number" style="color: var(--color-sold);">{{ won_listings|length }}</p>
   </article>
   <article>
     <p class="stat-label">Total Spent (EUR)</p>
-    <p class="stat-number" style="color: #0074d9;">{{ "%.2f"|format(total_spent_eur) }}</p>
+    <p class="stat-number" style="color: var(--color-active);">{{ "%.2f"|format(total_spent_eur) }}</p>
   </article>
   <article>
     <p class="stat-label">Avg Winning Price (EUR)</p>
@@ -104,7 +104,7 @@
           {% endif %}
         </td>
         <td class="no-wrap">{{ bid.bid_time|format_datetime }}</td>
-        <td>{% if bid.is_automatic %}<span style="color: #f59e0b; font-weight: 600;">auto</span>{% else %}manual{% endif %}</td>
+        <td>{% if bid.is_automatic %}<span style="color: var(--color-type-buy-now); font-weight: 600;">auto</span>{% else %}manual{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -129,13 +129,13 @@
         data: data.map(function(item) {
           return { x: item.time, y: item.total };
         }),
-        borderColor: "#0074d9",
+        borderColor: PALETTE.chart.spending,
         backgroundColor: "rgba(0, 116, 217, 0.1)",
         fill: true,
         stepped: "after",
         pointRadius: 6,
         pointHoverRadius: 10,
-        pointBackgroundColor: "#0074d9",
+        pointBackgroundColor: PALETTE.chart.spending,
       }]
     },
     options: {
