@@ -38,6 +38,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from auction_tracker.parsing.base import (
+  ListingGone,
   Parser,
   ParserBlocked,
   ParserCapabilities,
@@ -203,16 +204,13 @@ class LeBonCoinParser(Parser):
     ad = page_props.get("ad")
 
     if ad is None:
-      # The listing has been removed (HTTP 410 or equivalent).
+      # The page loaded successfully (HTTP 200) but the ad data is
+      # absent — the listing was removed, expired, or sold by the
+      # seller. Raise ListingGone so the worker marks it as sold
+      # without overwriting the stored title with a placeholder.
       list_id = _extract_list_id(url) or "unknown"
-      logger.info("LeBonCoin listing %s has been removed.", list_id)
-      return ScrapedListing(
-        external_id=list_id,
-        url=url or f"{_BASE_URL}/ad/offres/{list_id}",
-        title=f"[Removed] LeBonCoin #{list_id}",
-        listing_type="buy_now",
-        status="sold",
-        currency="EUR",
+      raise ListingGone(
+        f"LeBonCoin listing {list_id} is no longer available (ad=None in __NEXT_DATA__)"
       )
 
     return _parse_ad(ad)
