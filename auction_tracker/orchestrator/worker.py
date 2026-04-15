@@ -41,7 +41,12 @@ from sqlalchemy.orm import Session
 
 from datetime import UTC, datetime
 
-from auction_tracker.config import AppConfig, MonitoringStrategy, WebsiteConfig
+from auction_tracker.config import (
+  AppConfig,
+  MonitoringStrategy,
+  TransportKind,
+  WebsiteConfig,
+)
 from auction_tracker.database.engine import DatabaseEngine
 from auction_tracker.database.models import Listing, ListingStatus, SearchQuery
 from auction_tracker.database.repository import Repository
@@ -53,8 +58,8 @@ from auction_tracker.orchestrator.scheduler import (
   TrackedListing,
 )
 from auction_tracker.orchestrator.utils import fetch_and_parse_listing
-from auction_tracker.parsing.base import Parser, ParserBlocked, ParserRegistry
-from auction_tracker.transport.base import TransportError
+from auction_tracker.parsing.base import ListingGone, Parser, ParserBlocked, ParserRegistry
+from auction_tracker.transport.base import TransportBlocked, TransportError
 from auction_tracker.transport.router import TransportRouter
 
 logger = logging.getLogger(__name__)
@@ -146,6 +151,9 @@ class WebsiteWorker:
     self._request_delay: float = self._website_config.request_delay
     self._search_interval: float = search_interval
     self._classify: bool = classify
+    self._uses_camoufox: bool = (
+      self._website_config.transport == TransportKind.CAMOUFOX
+    )
 
     # Watch state
     self._watch_queue = CheckQueue()
@@ -276,11 +284,17 @@ class WebsiteWorker:
 
       if not executed:
         self._report_idle()
-      delay = (
-        self._request_delay + random.uniform(0, 0.5)
-        if executed
-        else self._idle_sleep_duration()
-      )
+      if not executed:
+        delay = self._idle_sleep_duration()
+      elif self._uses_camoufox:
+        # Camoufox websites share a single browser page behind an
+        # asyncio lock. The lock wait already provides natural spacing
+        # between requests to the same website (~4x the page load time
+        # when 4 websites share the browser). Adding a full inter-tick
+        # sleep would only further starve the watch/fetch queues.
+        delay = random.uniform(0.05, 0.15)
+      else:
+        delay = self._request_delay + random.uniform(0, 0.5)
       with contextlib.suppress(TimeoutError):
         await asyncio.wait_for(stop_event.wait(), timeout=delay)
 
@@ -447,6 +461,43 @@ class WebsiteWorker:
       )
       self._flush_utilization()
     except (TransportError, ParserBlocked) as exc:
+      # A 404 means the listing page no longer exists on the server — treat
+      # it as cancelled regardless of monitoring strategy or website.
+      if isinstance(exc, TransportError) and exc.status_code == 404:
+        logger.info(
+          "[%s] Listing %s is gone (HTTP 404) — marking as cancelled",
+          self._name, tracked.external_id,
+        )
+        tracked.is_terminal = True
+        with self._database.session() as session:
+          self._repo.mark_listing_status(
+            session, tracked.listing_id, ListingStatus.CANCELLED,
+          )
+          session.commit()
+        self._reschedule_watch(tracked)
+        return
+
+      # A persistent HTTP 403 on a snapshot (classifieds) listing means the
+      # ad has been removed by the seller — treat it as sold rather than as
+      # an error so the metric counters stay clean and the listing is retired.
+      if (
+        isinstance(exc, TransportBlocked)
+        and exc.status_code == 403
+        and tracked.strategy == MonitoringStrategy.SNAPSHOT
+      ):
+        logger.info(
+          "[%s] Listing %s is gone (HTTP 403) — marking as sold",
+          self._name, tracked.external_id,
+        )
+        tracked.is_terminal = True
+        with self._database.session() as session:
+          self._repo.mark_listing_status(
+            session, tracked.listing_id, ListingStatus.SOLD,
+          )
+          session.commit()
+        self._reschedule_watch(tracked)
+        return
+
       tracked.consecutive_failures += 1
       self._reschedule_watch(tracked)
       self._stats.errors += 1
@@ -460,6 +511,23 @@ class WebsiteWorker:
         )
       if self._live:
         self._live.increment("errors")
+      return
+    except ListingGone as exc:
+      # The page returned a valid response but the listing content is
+      # gone — the lot has been removed or the ad was taken down. Mark
+      # it as sold (best guess for completed auctions and withdrawn
+      # classifieds) without incrementing the error counter.
+      logger.info(
+        "[%s] Listing %s is gone — marking as sold: %s",
+        self._name, tracked.external_id, exc,
+      )
+      tracked.is_terminal = True
+      with self._database.session() as session:
+        self._repo.mark_listing_status(
+          session, tracked.listing_id, ListingStatus.SOLD,
+        )
+        session.commit()
+      self._reschedule_watch(tracked)
       return
     except Exception as exc:
       tracked.consecutive_failures += 1
@@ -480,6 +548,14 @@ class WebsiteWorker:
     self._stats.watch_checks += 1
     tracked.consecutive_failures = 0
     tracked.last_fetched_at = time.time()
+    logger.info(
+      "[%s] Watched %s [%s] — %s %s",
+      self._name,
+      scraped.title[:60] if scraped.title else "?",
+      tracked.external_id,
+      scraped.current_price or "?",
+      scraped.currency or "",
+    )
 
     # Use a single session for all DB writes in this check.
     # _process_watch_result receives the session so that its
@@ -557,6 +633,11 @@ class WebsiteWorker:
         self._flush_utilization()
 
       self._stats.listings_fetched += 1
+      logger.info(
+        "[%s] Fetched listing %s [%s]",
+        self._name, scraped.title[:60] if scraped.title else "?",
+        item.external_id,
+      )
       if self._metrics:
         self._metrics.fetch_listing(self._name, item.external_id)
       if self._live:
@@ -570,6 +651,52 @@ class WebsiteWorker:
           self._enqueue_watch(listing)
 
     except Exception as exc:
+      # A 404 means the listing page no longer exists — mark cancelled
+      # immediately without counting as an error.
+      if isinstance(exc, TransportError) and exc.status_code == 404:
+        logger.info(
+          "[%s] New listing %s not found (HTTP 404) — marking cancelled",
+          self._name, item.external_id,
+        )
+        with self._database.session() as session:
+          self._repo.mark_listing_status(
+            session, item.listing_id, ListingStatus.CANCELLED,
+          )
+          session.commit()
+        return
+
+      # A 403 on a snapshot listing means the ad was removed before we
+      # could fetch its details — mark cancelled and skip without counting
+      # as an error (not a tool failure, just a deleted listing).
+      if (
+        isinstance(exc, TransportBlocked)
+        and exc.status_code == 403
+        and self._parser.capabilities.has_buy_now
+        and not self._parser.capabilities.has_bid_history
+      ):
+        logger.info(
+          "[%s] New listing %s is already gone (HTTP 403) — marking cancelled",
+          self._name, item.external_id,
+        )
+        with self._database.session() as session:
+          self._repo.mark_listing_status(
+            session, item.listing_id, ListingStatus.CANCELLED,
+          )
+          session.commit()
+        return
+
+      if isinstance(exc, ListingGone):
+        logger.info(
+          "[%s] New listing %s is gone — marking cancelled: %s",
+          self._name, item.external_id, exc,
+        )
+        with self._database.session() as session:
+          self._repo.mark_listing_status(
+            session, item.listing_id, ListingStatus.CANCELLED,
+          )
+          session.commit()
+        return
+
       self._fetch_error_counts[item.listing_id] = error_count + 1
       new_count = error_count + 1
       if new_count >= _MAX_CONSECUTIVE_FETCH_ERRORS:
@@ -649,6 +776,27 @@ class WebsiteWorker:
         self._live.increment("search_results_found", result_count)
         self._live.increment("new_listings", new_count)
 
+    except TransportError as exc:
+      # Some search endpoints (e.g. Buyee/Yahoo Japan) return HTTP 404
+      # when a query finds no results instead of a 200 with an empty
+      # list. Treat this as zero results rather than an error.
+      if exc.status_code == 404:
+        logger.debug(
+          "[%s] Search returned 404 for '%s' — treating as empty",
+          self._name, query.query_text,
+        )
+      else:
+        self._stats.errors += 1
+        logger.error(
+          "[%s] Search error for '%s': %s",
+          self._name, query.query_text, exc, exc_info=True,
+        )
+        if self._metrics:
+          self._metrics.error(
+            "search", str(exc), website_name=self._name,
+          )
+        if self._live:
+          self._live.increment("errors")
     except Exception as exc:
       self._stats.errors += 1
       logger.error(
