@@ -25,7 +25,7 @@ from flask import (
   url_for,
 )
 from markupsafe import Markup
-from sqlalchemy import delete, desc, func, select
+from sqlalchemy import delete, desc, func, select, text
 from sqlalchemy.orm import joinedload
 
 from auction_tracker.config import AppConfig, load_config
@@ -542,24 +542,25 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         select(Seller).options(joinedload(Seller.website))
       ).scalars().unique().all()
 
-      # Aggregate listing stats per seller without loading full ORM objects.
-      listing_rows = session.execute(
-        select(Listing.seller_id, Listing.status, Listing.final_price_eur)
-        .where(Listing.seller_id.isnot(None))
-      ).all()
-
+      # Aggregate listing stats per seller in SQL.
       stats_by_seller: dict[int, dict] = defaultdict(
         lambda: {"total": 0, "sold": 0, "active": 0, "volume_eur": 0.0}
       )
-      for row in listing_rows:
-        entry = stats_by_seller[row.seller_id]
-        entry["total"] += 1
-        if row.status == ListingStatus.SOLD:
-          entry["sold"] += 1
-          if row.final_price_eur is not None:
-            entry["volume_eur"] += float(row.final_price_eur)
-        elif row.status == ListingStatus.ACTIVE:
-          entry["active"] += 1
+      for row in session.connection().execute(text(
+        "SELECT seller_id, COUNT(*),"
+        "  SUM(CASE WHEN status = 'SOLD' THEN 1 ELSE 0 END),"
+        "  SUM(CASE WHEN status = 'ACTIVE' THEN 1 ELSE 0 END),"
+        "  COALESCE(SUM(CASE WHEN status = 'SOLD'"
+        "    THEN COALESCE(final_price_eur, 0) ELSE 0 END), 0)"
+        " FROM listings WHERE seller_id IS NOT NULL"
+        " GROUP BY seller_id"
+      )):
+        stats_by_seller[row[0]] = {
+          "total": row[1],
+          "sold": row[2] or 0,
+          "active": row[3] or 0,
+          "volume_eur": float(row[4] or 0),
+        }
 
       all_website_names = sorted({s.website.name for s in all_sellers if s.website})
       all_countries = sorted({s.country for s in all_sellers if s.country})
@@ -1073,22 +1074,53 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       cursor += bucket_step  # type: ignore[operator]
     return labels
 
+  # ------------------------------------------------------------------
+  # SQL bucket expression for time-series GROUP BY
+  # ------------------------------------------------------------------
+
+  def _sql_bucket_expr(granularity: str) -> str:
+    """Return a SQLite expression that buckets ``timestamp`` by granularity."""
+    if granularity == "10m":
+      return (
+        "strftime('%Y-%m-%d %H:', timestamp) || "
+        "substr('0' || ((cast(strftime('%M', timestamp) as integer) / 10) * 10), -2)"
+      )
+    if granularity == "6h":
+      return (
+        "strftime('%Y-%m-%d ', timestamp) || "
+        "substr('0' || ((cast(strftime('%H', timestamp) as integer) / 6) * 6), -2) || ':00'"
+      )
+    if granularity == "1d":
+      return "strftime('%Y-%m-%d', timestamp)"
+    if granularity == "1w":
+      return "strftime('%Y-%m-%d', timestamp, 'weekday 0', '-6 days')"
+    if granularity == "1mo":
+      return "strftime('%Y-%m', timestamp)"
+    return "strftime('%Y-%m-%d %H:00', timestamp)"
+
+  # ------------------------------------------------------------------
+
   def _collect_operations_data(
     hours_back: int,
     granularity: str = "1h",
   ) -> dict:
     """Query the database and return all data needed for the operations page.
 
-    Extracted into a helper so the HTML route and the JSON API route
-    can share the same logic without duplication.
+    All heavy aggregation is pushed to SQL via GROUP BY.  Python only
+    handles the small number of resulting aggregate rows, never full
+    event tables.
     """
     bucket_fn, bucket_step = _make_bucket_fn(granularity)
 
     now = datetime.now(UTC)
     since = now - timedelta(hours=hours_back)
     since_naive = since.replace(tzinfo=None)
+    now_naive = now.replace(tzinfo=None)
 
     with database.session() as session:
+      conn = session.connection()
+
+      # ---- Pipeline status (fast scalar queries) ----
       last_start = session.execute(
         select(PipelineEvent.timestamp)
         .where(PipelineEvent.event_type == "pipeline_start")
@@ -1109,76 +1141,103 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         select(func.max(PipelineEvent.timestamp))
       ).scalar()
 
-      events_in_window = session.execute(
-        select(PipelineEvent)
-        .where(PipelineEvent.timestamp >= since_naive)
-        .order_by(desc(PipelineEvent.timestamp))
-      ).scalars().all()
-
+      # ---- Summary counts (SQL GROUP BY) ----
       event_type_counts: dict[str, int] = {}
-      for event in events_in_window:
-        event_type_counts[event.event_type] = event_type_counts.get(event.event_type, 0) + 1
+      for event_type, count in conn.execute(text(
+        "SELECT event_type, COUNT(*) FROM pipeline_events"
+        " WHERE timestamp >= :since GROUP BY event_type"
+      ), {"since": since_naive}):
+        event_type_counts[event_type] = count
 
-      request_types = {"search_run", "fetch_listing", "watch_check"}
+      request_types_sql = ("search_run", "fetch_listing", "watch_check")
+      request_type_map = {
+        "search_run": "search",
+        "fetch_listing": "fetch",
+        "watch_check": "watch",
+      }
+
       website_request_counts: dict[str, int] = {}
-      for event in events_in_window:
-        if event.event_type in request_types and event.website_name:
-          website_request_counts[event.website_name] = (
-            website_request_counts.get(event.website_name, 0) + 1
-          )
+      for website, count in conn.execute(text(
+        "SELECT website_name, COUNT(*) FROM pipeline_events"
+        " WHERE timestamp >= :since"
+        "   AND event_type IN ('search_run', 'fetch_listing', 'watch_check')"
+        "   AND website_name IS NOT NULL"
+        " GROUP BY website_name"
+      ), {"since": since_naive}):
+        website_request_counts[website] = count
 
-      error_events = [event for event in events_in_window if event.event_type == "error"]
+      # ---- Error counts by website and source (SQL + json_extract) ----
       error_by_source: dict[str, int] = {}
       error_by_website: dict[str, int] = {}
-      for event in error_events:
-        detail = json.loads(event.detail_json) if event.detail_json else {}
-        source = detail.get("source", "unknown")
-        error_by_source[source] = error_by_source.get(source, 0) + 1
-        if event.website_name:
-          error_by_website[event.website_name] = (
-            error_by_website.get(event.website_name, 0) + 1
-          )
+      for website, source, count in conn.execute(text(
+        "SELECT website_name,"
+        "  COALESCE(json_extract(detail_json, '$.source'), 'unknown'),"
+        "  COUNT(*)"
+        " FROM pipeline_events"
+        " WHERE timestamp >= :since AND event_type = 'error'"
+        " GROUP BY website_name,"
+        "  COALESCE(json_extract(detail_json, '$.source'), 'unknown')"
+      ), {"since": since_naive}):
+        error_by_source[source] = error_by_source.get(source, 0) + count
+        if website:
+          error_by_website[website] = error_by_website.get(website, 0) + count
 
-      search_events = [event for event in events_in_window if event.event_type == "search_run"]
+      # ---- Search stats per website (SQL + json_extract) ----
       search_stats: dict[str, dict] = {}
-      for event in search_events:
-        detail = json.loads(event.detail_json) if event.detail_json else {}
-        website = event.website_name or "unknown"
-        if website not in search_stats:
-          search_stats[website] = {"runs": 0, "results": 0, "new": 0}
-        search_stats[website]["runs"] += 1
-        search_stats[website]["results"] += detail.get("results_found", 0)
-        search_stats[website]["new"] += detail.get("new_listings", 0)
+      for website, runs, results, new in conn.execute(text(
+        "SELECT COALESCE(website_name, 'unknown'),"
+        "  COUNT(*),"
+        "  COALESCE(SUM(json_extract(detail_json, '$.results_found')), 0),"
+        "  COALESCE(SUM(json_extract(detail_json, '$.new_listings')), 0)"
+        " FROM pipeline_events"
+        " WHERE timestamp >= :since AND event_type = 'search_run'"
+        " GROUP BY website_name"
+      ), {"since": since_naive}):
+        search_stats[website] = {"runs": runs, "results": results, "new": new}
 
-      watch_cycles = [event for event in events_in_window if event.event_type == "watch_cycle"]
-      total_watch_checks = 0
+      # ---- Watch stats ----
+      # Each watch_check event corresponds to one individual listing check.
+      # There is no batch/cycle event that carries aggregated counts; the
+      # completion metric is derived from the listings table instead.
+      total_watch_checks = conn.execute(text(
+        "SELECT COUNT(*) FROM pipeline_events"
+        " WHERE timestamp >= :since AND event_type = 'watch_check'"
+      ), {"since": since_naive}).scalar() or 0
+      watch_cycle_count = total_watch_checks
       total_watch_updated = 0
-      total_watch_completed = 0
       total_watch_extensions = 0
-      for event in watch_cycles:
-        detail = json.loads(event.detail_json) if event.detail_json else {}
-        total_watch_checks += detail.get("checks", 0)
-        total_watch_updated += detail.get("updated", 0)
-        total_watch_completed += detail.get("completed", 0)
-        total_watch_extensions += detail.get("extensions", 0)
+      total_watch_completed = conn.execute(text(
+        "SELECT COUNT(*) FROM listings"
+        " WHERE status IN ('SOLD','UNSOLD','CANCELLED')"
+      )).scalar() or 0
 
-      fetch_batches = [event for event in events_in_window if event.event_type == "fetch_batch"]
-      total_fetched = 0
-      total_classified = 0
-      total_rejected = 0
-      for event in fetch_batches:
-        detail = json.loads(event.detail_json) if event.detail_json else {}
-        total_fetched += detail.get("fetched", 0)
-        total_classified += detail.get("classified", 0)
-        total_rejected += detail.get("rejected", 0)
+      # ---- Fetch stats ----
+      # Each fetch_listing event corresponds to one listing page fetch.
+      # Classification decisions are stored as separate classification events.
+      total_fetched = conn.execute(text(
+        "SELECT COUNT(*) FROM pipeline_events"
+        " WHERE timestamp >= :since AND event_type = 'fetch_listing'"
+      ), {"since": since_naive}).scalar() or 0
+      fetch_batch_count = total_fetched
+      total_classified = conn.execute(text(
+        "SELECT COUNT(*) FROM pipeline_events"
+        " WHERE timestamp >= :since AND event_type = 'classification'"
+        "   AND json_extract(detail_json, '$.accepted') = 1"
+      ), {"since": since_naive}).scalar() or 0
+      total_rejected = conn.execute(text(
+        "SELECT COUNT(*) FROM pipeline_events"
+        " WHERE timestamp >= :since AND event_type = 'classification'"
+        "   AND json_extract(detail_json, '$.accepted') = 0"
+      ), {"since": since_naive}).scalar() or 0
 
+      # ---- Pending fetches ----
       pending_fetches = session.execute(
         select(func.count(Listing.id))
         .where(Listing.is_fully_fetched.is_(False))
         .where(Listing.status != ListingStatus.CANCELLED)
       ).scalar() or 0
 
-      now_naive = now.replace(tzinfo=None)
+      # ---- Upcoming auctions (LIMIT 50, already fast) ----
       upcoming_listings = session.execute(
         select(Listing)
         .options(joinedload(Listing.website))
@@ -1189,7 +1248,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         .limit(50)
       ).scalars().unique().all()
 
-      # Serialise upcoming auctions for the JSON API and template.
       display_tz = ZoneInfo(config.display_timezone)
       upcoming_auctions_json = []
       for listing in upcoming_listings:
@@ -1208,149 +1266,145 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           ),
         })
 
-      # Request type label mapping.
-      request_type_map = {
-        "search_run": "search",
-        "fetch_listing": "fetch",
-        "watch_check": "watch",
-      }
+      # ---- Time-series: bucketed counts via SQL GROUP BY ----
+      bucket_expr = _sql_bucket_expr(granularity)
 
-      hourly_new_listings: dict[str, int] = {}
-      hourly_completed: dict[str, int] = {}
-      hourly_updated: dict[str, int] = {}
-      hourly_errors: dict[str, int] = {}
+      # Requests by (bucket, event_type, website).
       hourly_requests: dict[str, int] = {}
-      # {type_label: {bucket: count}} for stacked request-type bar.
       hourly_requests_by_type: dict[str, dict[str, int]] = {
         label: {} for label in request_type_map.values()
       }
-      # {website: {bucket: count}} for requests-by-website line chart.
       hourly_requests_by_website: dict[str, dict[str, int]] = {}
-      # {website: {bucket: count}} for stacked error-by-website bar.
+      for bucket, event_type, website, count in conn.execute(text(
+        f"SELECT {bucket_expr} AS bucket, event_type, website_name, COUNT(*)"
+        " FROM pipeline_events"
+        " WHERE timestamp >= :since"
+        "   AND event_type IN ('search_run', 'fetch_listing', 'watch_check')"
+        " GROUP BY bucket, event_type, website_name"
+      ), {"since": since_naive}):
+        hourly_requests[bucket] = hourly_requests.get(bucket, 0) + count
+        type_label = request_type_map.get(event_type, "other")
+        hourly_requests_by_type[type_label][bucket] = (
+          hourly_requests_by_type[type_label].get(bucket, 0) + count
+        )
+        if website:
+          if website not in hourly_requests_by_website:
+            hourly_requests_by_website[website] = {}
+          hourly_requests_by_website[website][bucket] = (
+            hourly_requests_by_website[website].get(bucket, 0) + count
+          )
+
+      # Errors by (bucket, website, source).
+      hourly_errors: dict[str, int] = {}
       hourly_errors_by_website: dict[str, dict[str, int]] = {}
-      # {source: {bucket: count}} for stacked error-by-source bar.
       hourly_errors_by_source: dict[str, dict[str, int]] = {}
+      for bucket, website, source, count in conn.execute(text(
+        f"SELECT {bucket_expr} AS bucket, website_name,"
+        "  COALESCE(json_extract(detail_json, '$.source'), 'unknown'),"
+        "  COUNT(*)"
+        " FROM pipeline_events"
+        " WHERE timestamp >= :since AND event_type = 'error'"
+        " GROUP BY bucket, website_name,"
+        "  COALESCE(json_extract(detail_json, '$.source'), 'unknown')"
+      ), {"since": since_naive}):
+        hourly_errors[bucket] = hourly_errors.get(bucket, 0) + count
+        website_key = website or "unknown"
+        if website_key not in hourly_errors_by_website:
+          hourly_errors_by_website[website_key] = {}
+        hourly_errors_by_website[website_key][bucket] = (
+          hourly_errors_by_website[website_key].get(bucket, 0) + count
+        )
+        if source not in hourly_errors_by_source:
+          hourly_errors_by_source[source] = {}
+        hourly_errors_by_source[source][bucket] = (
+          hourly_errors_by_source[source].get(bucket, 0) + count
+        )
 
-      # Idle / active accumulators per website per bucket.
-      idle_by_website: dict[str, dict[str, float]] = {}
-      active_by_website: dict[str, dict[str, float]] = {}
-      # Per-bucket last (most recent) fetch/watch/search queue depth.
-      # events_in_window is ordered DESC so the first event seen for any
-      # (website, bucket) is the chronologically latest one.
-      queue_depth_accum: dict[str, dict[str, dict[str, int | None]]] = {}
-      # Late watch checks per website per bucket.
-      late_watch_threshold = config.scheduler.late_watch_threshold
-      late_watch_by_website: dict[str, dict[str, int]] = {}
+      # New listings per bucket (from search_run detail).
+      hourly_new_listings: dict[str, int] = {}
+      for bucket, new_count in conn.execute(text(
+        f"SELECT {bucket_expr} AS bucket,"
+        "  COALESCE(SUM(json_extract(detail_json, '$.new_listings')), 0)"
+        " FROM pipeline_events"
+        " WHERE timestamp >= :since AND event_type = 'search_run'"
+        " GROUP BY bucket"
+      ), {"since": since_naive}):
+        if new_count:
+          hourly_new_listings[bucket] = int(new_count)
 
-      for event in events_in_window:
-        bucket = bucket_fn(event.timestamp)
-        if event.event_type == "search_run":
-          detail = json.loads(event.detail_json) if event.detail_json else {}
-          hourly_new_listings[bucket] = (
-            hourly_new_listings.get(bucket, 0) + detail.get("new_listings", 0)
-          )
-        if event.event_type == "watch_cycle":
-          detail = json.loads(event.detail_json) if event.detail_json else {}
-          hourly_completed[bucket] = (
-            hourly_completed.get(bucket, 0) + detail.get("completed", 0)
-          )
-          hourly_updated[bucket] = (
-            hourly_updated.get(bucket, 0) + detail.get("updated", 0)
-          )
-        if event.event_type == "watch_check":
-          detail = json.loads(event.detail_json) if event.detail_json else {}
-          delay = detail.get("delay_seconds", 0.0)
-          if delay >= late_watch_threshold and event.website_name:
-            website = event.website_name
-            if website not in late_watch_by_website:
-              late_watch_by_website[website] = {}
-            late_watch_by_website[website][bucket] = (
-              late_watch_by_website[website].get(bucket, 0) + 1
-            )
-        if event.event_type == "worker_utilization" and event.website_name:
-          detail = json.loads(event.detail_json) if event.detail_json else {}
-          website = event.website_name
-          if website not in idle_by_website:
-            idle_by_website[website] = {}
-            active_by_website[website] = {}
-          idle_by_website[website][bucket] = (
-            idle_by_website[website].get(bucket, 0.0)
-            + detail.get("idle_seconds", 0.0)
-          )
-          active_by_website[website][bucket] = (
-            active_by_website[website].get(bucket, 0.0)
-            + detail.get("active_seconds", 0.0)
-          )
-          if (
-            "fetch_queue" in detail
-            or "watch_queue" in detail
-            or "search_queue" in detail
-          ):
-            if website not in queue_depth_accum:
-              queue_depth_accum[website] = {}
-            if bucket not in queue_depth_accum[website]:
-              queue_depth_accum[website][bucket] = {
-                "lf": None, "lw": None, "ls": None,
-              }
-            accum = queue_depth_accum[website][bucket]
-            # First-write-wins: since events are newest-first, the first
-            # value recorded is the chronologically last one in the bucket.
-            if "fetch_queue" in detail and accum["lf"] is None:
-              accum["lf"] = int(detail["fetch_queue"])
-            if "watch_queue" in detail and accum["lw"] is None:
-              accum["lw"] = int(detail["watch_queue"])
-            if "search_queue" in detail and accum["ls"] is None:
-              accum["ls"] = int(detail["search_queue"])
-        if event.event_type == "error":
-          hourly_errors[bucket] = hourly_errors.get(bucket, 0) + 1
-          website = event.website_name or "unknown"
-          if website not in hourly_errors_by_website:
-            hourly_errors_by_website[website] = {}
-          hourly_errors_by_website[website][bucket] = (
-            hourly_errors_by_website[website].get(bucket, 0) + 1
-          )
-          detail = json.loads(event.detail_json) if event.detail_json else {}
-          source = detail.get("source", "unknown")
-          if source not in hourly_errors_by_source:
-            hourly_errors_by_source[source] = {}
-          hourly_errors_by_source[source][bucket] = (
-            hourly_errors_by_source[source].get(bucket, 0) + 1
-          )
-        if event.event_type in request_types:
-          hourly_requests[bucket] = hourly_requests.get(bucket, 0) + 1
-          type_label = request_type_map.get(event.event_type, "other")
-          hourly_requests_by_type[type_label][bucket] = (
-            hourly_requests_by_type[type_label].get(bucket, 0) + 1
-          )
-          if event.website_name:
-            website = event.website_name
-            if website not in hourly_requests_by_website:
-              hourly_requests_by_website[website] = {}
-            hourly_requests_by_website[website][bucket] = (
-              hourly_requests_by_website[website].get(bucket, 0) + 1
-            )
-
+      # Sold/unsold/completed by end_time bucket.
+      # The status column stores Python enum names (uppercase).
+      # "Completed" is the union of sold and unsold auction-type listings.
+      hourly_updated: dict[str, int] = {}
       hourly_sold: dict[str, int] = {}
       hourly_unsold: dict[str, int] = {}
-      for (end_time,) in session.execute(
-        select(Listing.end_time)
-        .where(Listing.status == ListingStatus.SOLD)
-        .where(Listing.end_time.isnot(None))
-        .where(Listing.end_time >= since_naive)
-        .where(Listing.end_time <= now_naive)
-      ).all():
-        bucket = bucket_fn(end_time)
-        hourly_sold[bucket] = hourly_sold.get(bucket, 0) + 1
-      for (end_time,) in session.execute(
-        select(Listing.end_time)
-        .where(Listing.status == ListingStatus.UNSOLD)
-        .where(Listing.end_time.isnot(None))
-        .where(Listing.end_time >= since_naive)
-        .where(Listing.end_time <= now_naive)
-      ).all():
-        bucket = bucket_fn(end_time)
-        hourly_unsold[bucket] = hourly_unsold.get(bucket, 0) + 1
+      hourly_completed: dict[str, int] = {}
+      bucket_expr_end = bucket_expr.replace("timestamp", "end_time")
+      for bucket, sold, unsold in conn.execute(text(
+        f"SELECT {bucket_expr_end} AS bucket,"
+        "  SUM(CASE WHEN status = 'SOLD' THEN 1 ELSE 0 END),"
+        "  SUM(CASE WHEN status = 'UNSOLD' THEN 1 ELSE 0 END)"
+        " FROM listings"
+        " WHERE end_time IS NOT NULL"
+        "   AND end_time >= :since AND end_time <= :now"
+        "   AND status IN ('SOLD', 'UNSOLD')"
+        " GROUP BY bucket"
+      ), {"since": since_naive, "now": now_naive}):
+        if sold:
+          hourly_sold[bucket] = int(sold)
+        if unsold:
+          hourly_unsold[bucket] = int(unsold)
+        total = (sold or 0) + (unsold or 0)
+        if total:
+          hourly_completed[bucket] = hourly_completed.get(bucket, 0) + int(total)
 
+      # Worker utilization per (bucket, website) — these are smaller in
+      # count so loading rows + JSON parse is acceptable.
+      idle_by_website: dict[str, dict[str, float]] = {}
+      active_by_website: dict[str, dict[str, float]] = {}
+      queue_depth_accum: dict[str, dict[str, dict[str, int | None]]] = {}
+      for bucket, website, idle, active, fq, wq, sq in conn.execute(text(
+        f"SELECT {bucket_expr} AS bucket, website_name,"
+        "  SUM(COALESCE(json_extract(detail_json, '$.idle_seconds'), 0)),"
+        "  SUM(COALESCE(json_extract(detail_json, '$.active_seconds'), 0)),"
+        "  MAX(json_extract(detail_json, '$.fetch_queue')),"
+        "  MAX(json_extract(detail_json, '$.watch_queue')),"
+        "  MAX(json_extract(detail_json, '$.search_queue'))"
+        " FROM pipeline_events"
+        " WHERE timestamp >= :since AND event_type = 'worker_utilization'"
+        "   AND website_name IS NOT NULL"
+        " GROUP BY bucket, website_name"
+      ), {"since": since_naive}):
+        if website not in idle_by_website:
+          idle_by_website[website] = {}
+          active_by_website[website] = {}
+        idle_by_website[website][bucket] = float(idle or 0)
+        active_by_website[website][bucket] = float(active or 0)
+        if fq is not None or wq is not None or sq is not None:
+          if website not in queue_depth_accum:
+            queue_depth_accum[website] = {}
+          queue_depth_accum[website][bucket] = {
+            "lf": int(fq) if fq is not None else None,
+            "lw": int(wq) if wq is not None else None,
+            "ls": int(sq) if sq is not None else None,
+          }
+
+      # Late watch checks per (bucket, website).
+      late_watch_threshold = config.scheduler.late_watch_threshold
+      late_watch_by_website: dict[str, dict[str, int]] = {}
+      for bucket, website, count in conn.execute(text(
+        f"SELECT {bucket_expr} AS bucket, website_name, COUNT(*)"
+        " FROM pipeline_events"
+        " WHERE timestamp >= :since AND event_type = 'watch_check'"
+        "   AND website_name IS NOT NULL"
+        "   AND COALESCE(json_extract(detail_json, '$.delay_seconds'), 0) >= :threshold"
+        " GROUP BY bucket, website_name"
+      ), {"since": since_naive, "threshold": late_watch_threshold}):
+        if website not in late_watch_by_website:
+          late_watch_by_website[website] = {}
+        late_watch_by_website[website][bucket] = count
+
+      # ---- Assemble time-series output ----
       time_labels = _iter_time_labels(
         granularity, bucket_fn, bucket_step, since, now,
       )
@@ -1358,7 +1412,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       def _ts(hourly: dict[str, int]) -> list[int]:
         return [hourly.get(label, 0) for label in time_labels]
 
-      # Load % per website: active / (idle + active) * 100 per bucket (complement of idle %).
       load_pct_by_website: dict[str, list[float | None]] = {}
       for website in idle_by_website:
         load_pct_by_website[website] = []
@@ -1370,7 +1423,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
             round(100.0 * active / total, 1) if total > 0 else None
           )
 
-      # Late watch counts per website per bucket.
       late_watch_ts: dict[str, list[int]] = {}
       for website, buckets in late_watch_by_website.items():
         late_watch_ts[website] = [
@@ -1394,6 +1446,18 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
             fetch_queue_by_website[website].append(None)
             watch_queue_by_website[website].append(None)
             search_queue_by_website[website].append(None)
+
+      # Aggregate queue depths across all websites per bucket.
+      fetch_queue_total: dict[str, int] = {}
+      watch_queue_total: dict[str, int] = {}
+      for website_buckets in queue_depth_accum.values():
+        for label in time_labels:
+          cell = website_buckets.get(label)
+          if cell:
+            if cell["lf"] is not None:
+              fetch_queue_total[label] = fetch_queue_total.get(label, 0) + cell["lf"]
+            if cell["lw"] is not None:
+              watch_queue_total[label] = watch_queue_total.get(label, 0) + cell["lw"]
 
       timeseries_data = {
         "labels": time_labels,
@@ -1453,26 +1517,37 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         ],
         "load_pct_by_website": load_pct_by_website,
         "late_watch_by_website": late_watch_ts,
+        "fetch_queue_total": _ts(fetch_queue_total),
+        "watch_queue_total": _ts(watch_queue_total),
         "fetch_queue_by_website": fetch_queue_by_website,
         "watch_queue_by_website": watch_queue_by_website,
         "search_queue_by_website": search_queue_by_website,
       }
 
+      # ---- Recent errors (top 50 only) ----
       recent_errors = []
-      for event in error_events[:50]:
-        detail = json.loads(event.detail_json) if event.detail_json else {}
+      for row in conn.execute(text(
+        "SELECT timestamp, website_name,"
+        "  json_extract(detail_json, '$.source'),"
+        "  json_extract(detail_json, '$.message')"
+        " FROM pipeline_events"
+        " WHERE timestamp >= :since AND event_type = 'error'"
+        " ORDER BY timestamp DESC LIMIT 50"
+      ), {"since": since_naive}):
+        ts = row[0]
+        if isinstance(ts, str):
+          with contextlib.suppress(ValueError):
+            ts = datetime.fromisoformat(ts)
         recent_errors.append({
-          "timestamp": event.timestamp,
-          "website": event.website_name or "",
-          "source": detail.get("source", ""),
-          "message": detail.get("message", ""),
+          "timestamp": ts,
+          "website": row[1] or "",
+          "source": row[2] or "",
+          "message": row[3] or "",
         })
 
       # ---- Search-query charts (not time-windowed) ----
-
       source_prefix = "source_search:"
 
-      # Listings per search query, broken down by status.
       search_source_rows = session.execute(
         select(
           ListingAttribute.attribute_name,
@@ -1494,7 +1569,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           search_listing_data[query_text].get(status_label, 0) + row.cnt
         )
 
-      # Sort by total listings descending.
       sorted_query_keys = sorted(
         search_listing_data,
         key=lambda query: sum(search_listing_data[query].values()),
@@ -1510,7 +1584,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         for query in sorted_query_keys
       ]
 
-      # Rejection rate per search query.
       verified_counts = dict(session.execute(
         select(
           ListingAttribute.attribute_name,
@@ -1559,26 +1632,24 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
           "verified": verified,
         })
 
-      # New listings per search query over time (all-time, daily).
-      all_search_events = session.execute(
-        select(PipelineEvent)
-        .where(PipelineEvent.event_type == "search_run")
-        .order_by(PipelineEvent.timestamp)
-      ).scalars().all()
-
+      # New listings per search query over time — capped to last 90 days
+      # to avoid scanning the full event history.
+      search_since = (now - timedelta(days=90)).replace(tzinfo=None)
       daily_new_by_query: dict[str, dict[str, int]] = {}
-      for event in all_search_events:
-        detail = json.loads(event.detail_json) if event.detail_json else {}
-        query_text = detail.get("query", "")
-        new_count = detail.get("new_listings", 0)
-        if not query_text or new_count == 0:
+      for day, query_text, new_count in conn.execute(text(
+        "SELECT strftime('%Y-%m-%d', timestamp),"
+        "  json_extract(detail_json, '$.query'),"
+        "  SUM(json_extract(detail_json, '$.new_listings'))"
+        " FROM pipeline_events"
+        " WHERE event_type = 'search_run' AND timestamp >= :since"
+        "   AND json_extract(detail_json, '$.new_listings') > 0"
+        " GROUP BY 1, 2"
+      ), {"since": search_since}):
+        if not query_text or not new_count:
           continue
-        day = event.timestamp.strftime("%Y-%m-%d")
         if query_text not in daily_new_by_query:
           daily_new_by_query[query_text] = {}
-        daily_new_by_query[query_text][day] = (
-          daily_new_by_query[query_text].get(day, 0) + new_count
-        )
+        daily_new_by_query[query_text][day] = int(new_count)
 
       query_totals = {
         query: sum(days.values())
@@ -1603,8 +1674,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         },
       }
 
-      # ---- Classification charts (not time-windowed) ----
-
+      # ---- Classification charts ----
       classifier_rows = session.execute(
         select(
           ListingAttribute.listing_id,
@@ -1626,8 +1696,6 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
 
       accepted_scores: list[float] = []
       rejected_scores: list[float] = []
-      # Per-category accepted and rejected counts — all listings regardless
-      # of threshold, so the chart reflects the true distribution.
       top_class_counts: dict[str, dict[str, int]] = {}
       for _listing_id, attrs in classifier_by_listing.items():
         score_str = attrs.get("classifier_score")
@@ -1678,26 +1746,21 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         reverse=True,
       )
 
-      classification_events = session.execute(
-        select(PipelineEvent)
-        .where(PipelineEvent.event_type == "classification")
-        .order_by(PipelineEvent.timestamp)
-      ).scalars().all()
-
+      # Classification over time — SQL aggregate, capped to 90 days.
       daily_classification: dict[str, dict[str, int]] = {}
-      for event in classification_events:
-        day = event.timestamp.strftime("%Y-%m-%d")
-        detail = json.loads(event.detail_json) if event.detail_json else {}
-        is_accepted = detail.get("accepted", False)
-        if day not in daily_classification:
-          daily_classification[day] = {
-            "total": 0, "accepted": 0, "rejected": 0,
-          }
-        daily_classification[day]["total"] += 1
-        if is_accepted:
-          daily_classification[day]["accepted"] += 1
-        else:
-          daily_classification[day]["rejected"] += 1
+      for day, accepted_count, rejected_count in conn.execute(text(
+        "SELECT strftime('%Y-%m-%d', timestamp),"
+        "  SUM(CASE WHEN json_extract(detail_json, '$.accepted') THEN 1 ELSE 0 END),"
+        "  SUM(CASE WHEN json_extract(detail_json, '$.accepted') THEN 0 ELSE 1 END)"
+        " FROM pipeline_events"
+        " WHERE event_type = 'classification' AND timestamp >= :since"
+        " GROUP BY 1"
+      ), {"since": search_since}):
+        daily_classification[day] = {
+          "total": int(accepted_count + rejected_count),
+          "accepted": int(accepted_count),
+          "rejected": int(rejected_count),
+        }
 
       classification_days = sorted(daily_classification.keys())
       classification_timeseries = {
@@ -1726,7 +1789,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         "watch": event_type_counts.get("watch_check", 0),
       },
       "website_request_counts": website_request_counts,
-      "error_count": len(error_events),
+      "error_count": sum(error_by_website.values()),
       "error_by_source": error_by_source,
       "error_by_website": error_by_website,
       "search_stats": search_stats,
@@ -1734,11 +1797,11 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       "total_watch_updated": total_watch_updated,
       "total_watch_completed": total_watch_completed,
       "total_watch_extensions": total_watch_extensions,
-      "watch_cycle_count": len(watch_cycles),
+      "watch_cycle_count": watch_cycle_count,
       "total_fetched": total_fetched,
       "total_classified": total_classified,
       "total_rejected": total_rejected,
-      "fetch_batch_count": len(fetch_batches),
+      "fetch_batch_count": fetch_batch_count,
       "pending_fetches": pending_fetches,
       "upcoming_auctions": upcoming_auctions_json,
       "timeseries_data": timeseries_data,
