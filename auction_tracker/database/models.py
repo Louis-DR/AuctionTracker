@@ -169,6 +169,10 @@ class Listing(Base):
     UniqueConstraint("website_id", "external_id", name="uq_listing_website_external"),
     Index("ix_listing_status", "status"),
     Index("ix_listing_end_time", "end_time"),
+    Index("ix_listing_created_at", "created_at"),
+    Index("ix_listing_seller_id", "seller_id"),
+    Index("ix_listing_website_status", "website_id", "status"),
+    Index("ix_listing_is_fully_fetched", "is_fully_fetched"),
   )
 
   id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -416,6 +420,7 @@ class ListingAttribute(Base):
   __tablename__ = "listing_attributes"
   __table_args__ = (
     Index("ix_attribute_listing_name", "listing_id", "attribute_name"),
+    Index("ix_attribute_name_listing", "attribute_name", "listing_id"),
   )
 
   id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
