@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from auction_tracker.parsing.base import (
+  ListingGone,
   Parser,
   ParserCapabilities,
   ParserRegistry,
@@ -150,7 +151,10 @@ class LiveAuctioneersParser(Parser):
 
     item = _find_item(items_by_id, item_id)
     if item is None:
-      raise ValueError(f"Item not found in LiveAuctioneers page data")
+      # The page loaded but the item is absent from window.__data. This
+      # is typical for completed lots whose data has been removed — treat
+      # it as a gone listing rather than a parse error.
+      raise ListingGone("Item no longer present in LiveAuctioneers page data")
 
     actual_item_id = str(item.get("itemId", item_id or ""))
 

@@ -6,9 +6,10 @@ models.  They never perform HTTP requests or touch the browser.
 
 # Importing sites triggers auto-registration of all parsers.
 import auction_tracker.parsing.sites  # noqa: F401
-from auction_tracker.parsing.base import Parser, ParserRegistry
+from auction_tracker.parsing.base import ListingGone, Parser, ParserRegistry
 
 __all__ = [
+  "ListingGone",
   "Parser",
   "ParserRegistry",
 ]

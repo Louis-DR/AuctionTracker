@@ -17,6 +17,18 @@ from auction_tracker.parsing.models import ScrapedListing, ScrapedSearchResult
 logger = logging.getLogger(__name__)
 
 
+class ListingGone(ValueError):
+  """Raised when a listing page loads successfully but the listing no
+  longer exists on the site.
+
+  Unlike ``ParserBlocked`` (bot challenge page) or a transport-level 404,
+  the server returned HTTP 200 but the content clearly indicates the
+  listing has been removed, expired, or sold.  The worker treats this the
+  same as an HTTP 404: no error counter increment, and the listing is
+  marked terminal immediately.
+  """
+
+
 class ParserBlocked(Exception):
   """Raised when the fetched HTML is a bot-detection / consent page.
 

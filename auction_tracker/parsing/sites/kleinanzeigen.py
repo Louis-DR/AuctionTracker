@@ -35,6 +35,7 @@ from urllib.parse import quote
 from selectolax.parser import HTMLParser
 
 from auction_tracker.parsing.base import (
+  ListingGone,
   Parser,
   ParserCapabilities,
   ParserRegistry,
@@ -141,7 +142,10 @@ class KleinanzeigenParser(Parser):
     # Title from <h1>.
     title_node = tree.css_first("h1#viewad-title")
     if title_node is None:
-      raise ValueError("No listing title found on page")
+      # When a listing has been removed Kleinanzeigen returns a 200 page
+      # without the ad content. Treat this as a gone listing so the
+      # worker can mark it as terminal without counting it as an error.
+      raise ListingGone("Kleinanzeigen listing is no longer available (no title element)")
     title = title_node.text(strip=True)
 
     # External ID and structured metadata from BelenConf.
