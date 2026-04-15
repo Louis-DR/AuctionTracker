@@ -658,6 +658,9 @@ def fix_database(app: AppContext) -> None:
   2. Fix worker_utilization events whose idle/active seconds were
      stored with the wrong polarity (emitted before the utilization
      tracking bug was corrected).
+  3. Re-apply classifier verdicts: listings with classifier_accepted=0
+     whose status was reverted to active by the watch cycle are reset
+     back to cancelled.
   """
   import json
 
@@ -749,6 +752,50 @@ def fix_database(app: AppContext) -> None:
       )
     else:
       console.print("[dim]No worker_utilization events needed polarity correction.[/dim]")
+
+  # ------------------------------------------------------------------
+  # Step 3: re-apply classifier verdicts overwritten by the watch cycle
+  # ------------------------------------------------------------------
+  # Before the upsert_listing terminal-status guard was added, the watch
+  # cycle would overwrite a classifier-rejected (CANCELLED) listing back
+  # to ACTIVE every time it fetched a still-live page.  Find all listings
+  # that the classifier rejected but whose status is no longer CANCELLED,
+  # and reset them.
+  # ------------------------------------------------------------------
+  from sqlalchemy import update as _sa_update
+
+  with app.database.session() as session:
+    rejected_ids = session.execute(
+      select(ListingAttribute.listing_id)
+      .where(ListingAttribute.attribute_name == "classifier_accepted")
+      .where(ListingAttribute.attribute_value == "0")
+    ).scalars().all()
+
+    if not rejected_ids:
+      console.print("[dim]No classifier-rejected listings found.[/dim]")
+    else:
+      terminal_statuses = (
+        ListingStatus.SOLD,
+        ListingStatus.UNSOLD,
+        ListingStatus.CANCELLED,
+      )
+      # Only reset listings whose current status is non-terminal
+      # (i.e. the watch cycle or another path reverted them to ACTIVE,
+      # UPCOMING, UNKNOWN, etc.).
+      result = session.execute(
+        _sa_update(Listing)
+        .where(Listing.id.in_(rejected_ids))
+        .where(Listing.status.not_in(terminal_statuses))
+        .values(status=ListingStatus.CANCELLED)
+      )
+      reset_count = result.rowcount
+      if reset_count:
+        session.commit()
+        console.print(
+          f"[green]Reset {reset_count} classifier-rejected listings back to cancelled.[/green]"
+        )
+      else:
+        console.print("[dim]All classifier-rejected listings are already in a terminal state.[/dim]")
 
 
 # -------------------------------------------------------------------
