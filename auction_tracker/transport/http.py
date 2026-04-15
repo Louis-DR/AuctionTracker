@@ -162,6 +162,9 @@ class HttpTransport(Transport):
       except TransportBlocked:
         raise
       except TransportError as error:
+        # 404 is a definitive "not found" — retrying won't change the outcome.
+        if error.status_code == 404:
+          raise
         last_error = error
         if attempt < self._max_retries:
           wait = self._retry_backoff_factor ** (attempt - 1)

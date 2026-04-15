@@ -158,12 +158,11 @@ class TransportRouter:
 
     try:
       return await primary.fetch(url, **kwargs)
-    except TransportBlocked:
-      fallback = await self._resolve_fallback(website_config, primary, url, website_name)
-      if fallback is not None:
-        return await fallback.fetch(url, **kwargs)
-      raise
-    except TransportError:
+    except (TransportBlocked, TransportError) as exc:
+      # A 404 is a definitive server response — the fallback transport would
+      # receive the same reply, so there is no point attempting it.
+      if getattr(exc, "status_code", None) == 404:
+        raise
       fallback = await self._resolve_fallback(website_config, primary, url, website_name)
       if fallback is not None:
         return await fallback.fetch(url, **kwargs)
