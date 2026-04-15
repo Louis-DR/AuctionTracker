@@ -13,9 +13,39 @@ Two layers of file logging are supported:
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+
+class _SafeRotatingFileHandler(RotatingFileHandler):
+  """RotatingFileHandler that works on Windows when the log file is held open.
+
+  The standard handler uses ``os.rename()`` to cycle files, which fails on
+  Windows with ``PermissionError`` if any other process (editor, tail, Dropbox
+  scanner) has the file open.  This subclass overrides ``rotate()`` to fall
+  back to a copy-then-truncate strategy: the backup file is created with
+  ``shutil.copy2`` and the source file is truncated in-place so every existing
+  file handle remains valid.
+  """
+
+  def rotate(self, source: str, dest: str) -> None:
+    if os.path.exists(dest):
+      try:
+        os.remove(dest)
+      except OSError:
+        pass
+    try:
+      os.rename(source, dest)
+    except PermissionError:
+      # Another process holds the file open (common on Windows).
+      # Copy the content to the destination then wipe the source so the
+      # handler can reopen it as a fresh empty file.
+      shutil.copy2(source, dest)
+      with open(source, "w", encoding=self.encoding or "utf-8"):
+        pass
 
 
 def setup_logging(
@@ -55,7 +85,7 @@ def setup_logging(
 
   if log_file is not None:
     log_file.parent.mkdir(parents=True, exist_ok=True)
-    file_handler = RotatingFileHandler(
+    file_handler = _SafeRotatingFileHandler(
       log_file,
       maxBytes=max_bytes,
       backupCount=backup_count,
@@ -66,7 +96,7 @@ def setup_logging(
 
   if log_dir is not None:
     log_dir.mkdir(parents=True, exist_ok=True)
-    shared_handler = RotatingFileHandler(
+    shared_handler = _SafeRotatingFileHandler(
       log_dir / "shared.log",
       maxBytes=max_bytes,
       backupCount=backup_count,
@@ -112,7 +142,7 @@ def add_website_log_handler(
     "%(asctime)s %(levelname)-8s %(name)s [%(filename)s:%(lineno)d] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
   )
-  website_handler = RotatingFileHandler(
+  website_handler = _SafeRotatingFileHandler(
     log_dir / f"{website_name}.log",
     maxBytes=max_bytes,
     backupCount=backup_count,
