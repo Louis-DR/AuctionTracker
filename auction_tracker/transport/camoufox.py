@@ -26,8 +26,8 @@ Windows because:
 
 The lock is held for the entire duration of each fetch (including
 warm-up, navigation, human simulation, and content extraction).
-A hard ``asyncio`` timeout wraps each fetch to prevent a frozen
-browser from blocking the lock forever.
+Separate hard timeouts wrap the warm-up phase and the navigation
+phase to prevent a frozen browser from blocking the lock forever.
 """
 
 from __future__ import annotations
@@ -61,10 +61,20 @@ _OS_MAP = {"darwin": "macos", "linux": "linux", "windows": "windows"}
 # Stale Firefox lock files that prevent profile reuse after a crash.
 _FIREFOX_LOCK_FILES = ("parent.lock", "lock", ".parentlock")
 
-# Hard ceiling on a single fetch, including warm-up, navigation,
-# human-behaviour simulation, and DataDome wait. If the browser is
-# frozen, the asyncio timeout fires and the page is recycled.
-_HARD_FETCH_TIMEOUT = 120.0
+# Hard ceiling on the warm-up phase (homepage visit + human simulation
+# + cookie consent). Separate from the navigation timeout so that a
+# slow warm-up doesn't eat into the actual page fetch budget.
+_WARMUP_TIMEOUT = 60.0
+
+# Hard ceiling on the core navigation (goto + networkidle + human sim +
+# DataDome wait + content extraction). Does NOT include warm-up.
+_NAVIGATION_TIMEOUT = 90.0
+
+# Playwright goto() timeout. Playwright's own timeout mechanism can be
+# unreliable when the Firefox DevTools connection is stale, so we also
+# wrap goto in an asyncio.wait_for.
+_GOTO_TIMEOUT_MS = 30_000
+_GOTO_ASYNCIO_TIMEOUT = 45.0
 
 # After this many seconds in a fetch, log a stall warning.
 _STALL_WARNING_THRESHOLD = 45.0
@@ -117,11 +127,13 @@ class CamoufoxTransport(Transport):
   def __init__(
     self,
     timeout: float = 30.0,
-    request_delay: float = 3.0,
+    request_delay: float = 0.5,
     max_pages: int = 4,
     profile_directory: Path | None = None,
   ) -> None:
     self._timeout_ms = int(timeout * 1000)
+    # Kept low because the serialised _fetch_lock already spaces
+    # requests naturally across all websites sharing this browser.
     self._request_delay = request_delay
     self._profile_directory = profile_directory or Path("data/browser_profiles")
     self._camoufox = None
@@ -195,11 +207,57 @@ class CamoufoxTransport(Transport):
     logger.info("Camoufox transport stopped")
 
   async def _ensure_page(self):
-    """Return the working page, creating a replacement if it crashed."""
-    if self._page is None or self._page.is_closed():
-      logger.warning("Camoufox page was closed, creating a replacement")
+    """Return the working page, creating a replacement if it is gone.
+
+    If the context itself is dead (browser crashed), restarts the
+    entire browser before creating a new page.
+    """
+    if self._page is not None and not self._page.is_closed():
+      return self._page
+
+    logger.warning("Camoufox page is gone — creating a replacement page")
+    try:
       self._page = await self._context.new_page()
+    except Exception as exc:
+      logger.warning("Camoufox context is dead (%s) — restarting browser", exc)
+      await self._restart_browser()
     return self._page
+
+  async def _reset_page(self) -> None:
+    """Close the current page and clear the reference.
+
+    Called after a hard timeout or an unexpected browser error while the
+    ``_fetch_lock`` is still held, so the next caller always gets a fresh
+    page.  Uses a short inner timeout so a fully-frozen browser does not
+    block the reset indefinitely.
+    """
+    old_page = self._page
+    self._page = None
+    if old_page is not None:
+      with contextlib.suppress(Exception):
+        await asyncio.wait_for(old_page.close(), timeout=5.0)
+    logger.info("Camoufox page reset — next fetch will start on a fresh page")
+
+  async def _restart_browser(self) -> None:
+    """Tear down and re-launch the entire Camoufox browser.
+
+    Only called when the context is confirmed dead (e.g. browser process
+    crashed).  Runs while ``_fetch_lock`` is held so no concurrent fetch
+    can see a partially-initialised state.
+    """
+    logger.warning("Restarting Camoufox browser …")
+    if self._camoufox is not None:
+      with contextlib.suppress(Exception):
+        await asyncio.wait_for(
+          self._camoufox.__aexit__(None, None, None), timeout=10.0,
+        )
+      self._camoufox = None
+      self._context = None
+      self._page = None
+
+    self._warmed_up_domains.clear()
+    await self.start()
+    logger.info("Camoufox browser restarted successfully")
 
   async def _enforce_rate_limit(self) -> None:
     now = time.monotonic()
@@ -228,7 +286,10 @@ class CamoufoxTransport(Transport):
     homepage = f"https://www.{domain}/"
     logger.info("Warming up Camoufox session for %s", domain)
     try:
-      await page.goto(homepage, wait_until="domcontentloaded", timeout=30_000)
+      await asyncio.wait_for(
+        page.goto(homepage, wait_until="domcontentloaded", timeout=_GOTO_TIMEOUT_MS),
+        timeout=_GOTO_ASYNCIO_TIMEOUT,
+      )
       with contextlib.suppress(Exception):
         await page.wait_for_load_state("networkidle", timeout=10_000)
 
@@ -332,163 +393,162 @@ class CamoufoxTransport(Transport):
 
     logger.warning("DataDome challenge did not resolve within %.0fs", max_wait)
 
-  async def _do_fetch(self, url: str, warm_up: bool) -> FetchResult:
-    """Core fetch logic. Must be called while holding _fetch_lock."""
-    await self._enforce_rate_limit()
+  async def _do_warm_up(self, url: str) -> None:
+    """Run domain warm-up as a separately-timed step.
 
+    If this times out or fails, the warm-up is skipped and the actual
+    navigation proceeds anyway (the persistent profile may still have
+    valid cookies).
+    """
+    page = await self._ensure_page()
+    domain = self._extract_domain(url)
+    if not domain or domain in self._warmed_up_domains:
+      return
+    try:
+      await asyncio.wait_for(
+        self._warm_up_domain(page, domain),
+        timeout=_WARMUP_TIMEOUT,
+      )
+    except asyncio.TimeoutError:
+      logger.warning(
+        "Warm-up for %s timed out after %.0fs — proceeding without",
+        domain, _WARMUP_TIMEOUT,
+      )
+      self._warmed_up_domains.add(domain)
+
+  async def _do_navigate(self, url: str) -> FetchResult:
+    """Navigate to the target URL and extract content.
+
+    Must be called while holding ``_fetch_lock``. The warm-up has
+    already been performed by the caller. This method is deliberately
+    lean — human simulation and cookie consent are handled once during
+    warm-up, not on every page. The persistent profile retains cookies
+    and the serialised lock already spaces requests naturally across
+    the 4+ websites sharing this browser.
+    """
+    await self._enforce_rate_limit()
     page = await self._ensure_page()
     start_time = time.monotonic()
 
-    if warm_up:
-      domain = self._extract_domain(url)
-      if domain:
-        await self._warm_up_domain(page, domain)
-
-    await asyncio.sleep(random.uniform(0.5, 1.5))
-
-    # Collect JSON API responses issued by the page's JavaScript while it
-    # loads, so SPA parsers (e.g. Vinted) can use them.  We use a plain
-    # synchronous handler that just appends the Response object — no
-    # awaiting inside the callback avoids async-task race conditions.
-    # Response bodies remain readable after the event fires as long as
-    # the page hasn't navigated again, so we drain them after networkidle.
-    import json as _json
-    _json_responses: list = []
-
-    def _collect_json_response(response) -> None:
-      if len(_json_responses) >= 20:
-        return
-      with contextlib.suppress(Exception):
-        ct = (response.headers or {}).get("content-type", "")
-        if "json" in ct:
-          _json_responses.append(response)
-
-    page.on("response", _collect_json_response)
+    logger.debug("Camoufox navigating to %s", url)
     try:
-      logger.debug("Camoufox navigating to %s", url)
-      await page.goto(
-        url,
-        wait_until="domcontentloaded",
-        timeout=self._timeout_ms,
+      await asyncio.wait_for(
+        page.goto(url, wait_until="domcontentloaded", timeout=_GOTO_TIMEOUT_MS),
+        timeout=_GOTO_ASYNCIO_TIMEOUT,
       )
-
-      with contextlib.suppress(Exception):
-        await page.wait_for_load_state("networkidle", timeout=10_000)
-
+    except asyncio.TimeoutError:
       elapsed = time.monotonic() - start_time
-      if elapsed > _STALL_WARNING_THRESHOLD:
-        logger.warning(
-          "Camoufox fetch for %s has been running for %.0fs (navigation phase)",
-          url, elapsed,
-        )
-
-      await self._simulate_human_behavior(page)
-      await self._wait_for_datadome(page)
-      await self._dismiss_cookie_consent(page)
-
-      await asyncio.sleep(random.uniform(0.5, 2.0))
-
-      # Read collected response bodies now that the page is idle.
-      _captured_api: dict[str, str] = {}
-      for resp in _json_responses:
-        with contextlib.suppress(Exception):
-          body = await resp.body()
-          _captured_api[resp.url] = body.decode("utf-8", errors="replace")
-
-      if page.is_closed():
-        raise TransportBlocked(
-          f"Page closed during DataDome handling for {url}",
-          url=url,
-          status_code=403,
-        )
-
-      html = await page.content()
-      elapsed = time.monotonic() - start_time
-      final_url = page.url
-
-      if len(html) < 5000 and await self._is_datadome_challenge(page):
-        raise TransportBlocked(
-          f"Camoufox blocked by DataDome on {url}",
-          url=url,
-          status_code=403,
-        )
-
-      # Inject captured API responses as a parseable script tag so that
-      # SPA parsers (e.g. Vinted) can extract the XHR data they need.
-      if _captured_api:
-        payload = _json.dumps(_captured_api)
-        inject = (
-          f'<script id="__CAMOUFOX_CAPTURED_API__"'
-          f' type="application/json">{payload}</script>'
-        )
-        if "</body>" in html:
-          html = html.replace("</body>", inject + "\n</body>", 1)
-        else:
-          html += "\n" + inject
-        logger.debug(
-          "Camoufox injected %d captured API response(s) for %s",
-          len(_captured_api), url,
-        )
-
-      logger.debug(
-        "Camoufox fetched %s (%d bytes, %.1fs)",
-        url, len(html), elapsed,
-      )
-      return FetchResult(
-        html=html,
+      raise TransportTimeout(
+        f"Camoufox goto timed out after {elapsed:.0f}s for {url}",
         url=url,
-        status_code=200,
-        redirected_url=final_url if final_url != url else None,
-        elapsed_seconds=elapsed,
-        transport_name=self.name,
       )
 
-    finally:
-      page.remove_listener("response", _collect_json_response)
+    with contextlib.suppress(Exception):
+      await page.wait_for_load_state("networkidle", timeout=8_000)
+
+    elapsed = time.monotonic() - start_time
+    if elapsed > _STALL_WARNING_THRESHOLD:
+      logger.warning(
+        "Camoufox fetch for %s has been running for %.0fs (navigation phase)",
+        url, elapsed,
+      )
+
+    # Only check for DataDome if the page looks suspiciously small.
+    html = await page.content()
+    if len(html) < 5000:
+      if await self._is_datadome_challenge(page):
+        await self._wait_for_datadome(page)
+        html = await page.content()
+        if len(html) < 5000 and await self._is_datadome_challenge(page):
+          raise TransportBlocked(
+            f"Camoufox blocked by DataDome on {url}",
+            url=url,
+            status_code=403,
+          )
+
+    if page.is_closed():
+      raise TransportBlocked(
+        f"Page closed during DataDome handling for {url}",
+        url=url,
+        status_code=403,
+      )
+
+    elapsed = time.monotonic() - start_time
+    final_url = page.url
+
+    logger.debug(
+      "Camoufox fetched %s (%d bytes, %.1fs)",
+      url, len(html), elapsed,
+    )
+    return FetchResult(
+      html=html,
+      url=url,
+      status_code=200,
+      redirected_url=final_url if final_url != url else None,
+      elapsed_seconds=elapsed,
+      transport_name=self.name,
+    )
 
   async def fetch(self, url: str, **kwargs) -> FetchResult:
-    if self._context is None:
-      raise RuntimeError(
-        "CamoufoxTransport.fetch() called before start(). "
-        "The router must call start() before handing out the transport."
-      )
-
     warm_up = kwargs.get("warm_up", True)
 
     async with self._fetch_lock:
+      # Check inside the lock so a concurrent _restart_browser() that
+      # temporarily sets self._context = None doesn't race with us.
+      if self._context is None:
+        raise RuntimeError(
+          "CamoufoxTransport.fetch() called before start(). "
+          "The router must call start() before handing out the transport."
+        )
+
+      # Phase 1: warm-up (separate timeout, failures are non-fatal).
+      if warm_up:
+        try:
+          await self._do_warm_up(url)
+        except Exception as exc:
+          logger.warning(
+            "Warm-up failed for %s, proceeding anyway: %s", url, exc,
+          )
+
+      # Phase 2: core navigation with its own hard timeout.
       try:
         return await asyncio.wait_for(
-          self._do_fetch(url, warm_up),
-          timeout=_HARD_FETCH_TIMEOUT,
+          self._do_navigate(url),
+          timeout=_NAVIGATION_TIMEOUT,
         )
 
       except asyncio.TimeoutError:
         logger.error(
-          "Camoufox hard timeout after %.0fs for %s — browser may be frozen",
-          _HARD_FETCH_TIMEOUT, url,
+          "Camoufox navigation timeout after %.0fs for %s — resetting browser page",
+          _NAVIGATION_TIMEOUT, url,
         )
+        await self._reset_page()
         raise TransportTimeout(
-          f"Camoufox hard timeout after {_HARD_FETCH_TIMEOUT:.0f}s for {url} "
+          f"Camoufox hard timeout after {_NAVIGATION_TIMEOUT:.0f}s for {url} "
           "(browser likely frozen/suspended)",
           url=url,
         )
 
       except TransportBlocked:
         raise
+
       except Exception as error:
         error_name = type(error).__name__
         error_str = str(error)
         if "timeout" in error_name.lower() or "Timeout" in error_str:
+          await self._reset_page()
           raise TransportTimeout(
             f"Camoufox timeout for {url}: {error}",
             url=url,
           ) from error
         if "TargetClosedError" in error_name or "Target closed" in error_str:
+          await self._reset_page()
           raise TransportBlocked(
             f"Camoufox page closed (likely anti-bot) for {url}",
             url=url,
             status_code=403,
           ) from error
+        await self._reset_page()
         raise TransportError(
           f"Camoufox error for {url}: {error}",
           url=url,
