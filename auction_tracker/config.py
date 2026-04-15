@@ -215,15 +215,14 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
   ),
   "leboncoin": WebsiteConfig(
     # DataDome blocks curl_cffi and vanilla Playwright Chromium.
-    # Camoufox (Firefox fork with C++ fingerprint masking, humanize,
-    # persistent profiles, WebRTC blocking, and COOP disabling) is
-    # the primary transport. If Camoufox is blocked, the browser
-    # fallback uses rebrowser-playwright (CDP leak patches) which
-    # can sometimes succeed where Camoufox fails.
+    # Camoufox is the only transport that reliably passes DataDome; no
+    # fallback is configured because the browser transport is blocked
+    # just as hard, and a 403 from either transport means the ad has
+    # been removed (handled by the worker as a sold/cancelled event).
     transport=TransportKind.CAMOUFOX,
-    fallback_transport=TransportKind.BROWSER,
+    fallback_transport=None,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
-    request_delay=4.0,
+    request_delay=1.0,
   ),
   "drouot": WebsiteConfig(
     transport=TransportKind.HTTP,
@@ -268,12 +267,11 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     # Vinted's /api/v2/ endpoints require an Authorization bearer token
     # that is only injected by the JavaScript SPA — a direct browser
     # navigation or curl request never sends it.  We therefore navigate
-    # to the HTML web pages and parse the __NEXT_DATA__ block embedded
-    # by Next.js SSR, which avoids auth entirely.
+    # to the HTML web pages and parse the rendered DOM.
     transport=TransportKind.CAMOUFOX,
     fallback_transport=TransportKind.HTTP,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
-    request_delay=3.0,
+    request_delay=1.0,
     preferred_domain="vinted.fr",
     http_warm_up=True,
   ),
@@ -293,13 +291,13 @@ _DEFAULT_WEBSITES: dict[str, WebsiteConfig] = {
     transport=TransportKind.CAMOUFOX,
     fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
-    request_delay=3.0,
+    request_delay=1.0,
   ),
   "subito": WebsiteConfig(
     transport=TransportKind.CAMOUFOX,
     fallback_transport=TransportKind.BROWSER,
     monitoring_strategy=MonitoringStrategy.SNAPSHOT,
-    request_delay=3.0,
+    request_delay=1.0,
   ),
   "marktplaats": WebsiteConfig(
     transport=TransportKind.HTTP,

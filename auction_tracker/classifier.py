@@ -57,12 +57,17 @@ CLASSIFICATION_LABELS = [
   "a sculpture",
   "a coin",
   "a stamp",
+  "a medal",
   "cutlery",
   "a musical instrument",
   "a decorated box",
 
   # Other items.
   "a piece of furniture",
+  "a chair",
+  "a table",
+  "a boat",
+  "a bike",
   "a vehicle",
   "a rifle",
   "a knife",

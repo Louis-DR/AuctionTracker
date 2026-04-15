@@ -70,22 +70,23 @@ websites:
   ebay:
     enabled: true
     transport: http
-    request_delay: 2s        # Min pause between two eBay requests
+    request_delay: 2s
     monitoring_strategy: snapshot
     preferred_domain: ebay.fr
-    http_warm_up: true       # Visit homepage first to get session cookies
+    http_warm_up: true
   leboncoin:
     enabled: true
-    transport: camoufox      # Camoufox (Firefox fork with C++ fingerprint masking)
-    fallback_transport: browser  # rebrowser-playwright Chromium as fallback
+    transport: camoufox
     monitoring_strategy: snapshot
-    request_delay: 4s        # Min pause between two LeBonCoin requests
+    request_delay: 1s
+    http_warm_up: true
   drouot:
     enabled: true
     transport: http
     fallback_transport: browser
     monitoring_strategy: post_auction
     request_delay: 2s
+    http_warm_up: true
   catawiki:
     enabled: true
     transport: http
@@ -108,8 +109,10 @@ websites:
   invaluable:
     enabled: false
     transport: http
+    fallback_transport: browser
     monitoring_strategy: post_auction
     request_delay: 2s
+    http_warm_up: true
   liveauctioneers:
     enabled: true
     transport: http
@@ -123,18 +126,17 @@ websites:
     request_delay: 2s
   vinted:
     enabled: true
-    transport: camoufox        # Navigate to HTML pages, parse __NEXT_DATA__
-    fallback_transport: http   # HTTP fallback if Camoufox is unavailable
+    transport: camoufox
     monitoring_strategy: snapshot
-    request_delay: 3s
+    request_delay: 1s
     preferred_domain: vinted.fr
     http_warm_up: true
   todocoleccion:
-    enabled: true
+    enabled: false
     transport: http
     fallback_transport: browser
     monitoring_strategy: snapshot
-    request_delay: 3s
+    request_delay: 4s
   kleinanzeigen:
     enabled: true
     transport: http
@@ -144,18 +146,19 @@ websites:
   ricardo:
     enabled: true
     transport: camoufox
-    fallback_transport: browser
     monitoring_strategy: snapshot
-    request_delay: 3s
+    request_delay: 1s
+    http_warm_up: true
   subito:
     enabled: true
     transport: camoufox
-    fallback_transport: browser
     monitoring_strategy: snapshot
-    request_delay: 3s
+    request_delay: 1s
+    http_warm_up: true
   marktplaats:
-    enabled: true
+    enabled: false
     transport: http
     fallback_transport: browser
     monitoring_strategy: snapshot
     request_delay: 3s
+    http_warm_up: true
