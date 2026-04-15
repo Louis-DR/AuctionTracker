@@ -148,8 +148,19 @@ class Repository:
       listing.url = url
       listing.title = title
       for key, value in kwargs.items():
-        if value is not None:
-          setattr(listing, key, value)
+        if value is None:
+          continue
+        # Never regress a terminal status to a non-terminal one via a
+        # routine ingest. Terminal statuses (SOLD, UNSOLD, CANCELLED)
+        # are only changed via mark_listing_status(). This prevents the
+        # watch cycle from silently overwriting a classifier-rejected
+        # (CANCELLED) listing back to ACTIVE when the parser returns
+        # "active" for a still-live page.
+        if key == "status":
+          _terminal = (ListingStatus.SOLD, ListingStatus.UNSOLD, ListingStatus.CANCELLED)
+          if listing.status in _terminal and value not in _terminal:
+            continue
+        setattr(listing, key, value)
       listing.last_checked_at = datetime.now(UTC).replace(tzinfo=None)
     session.flush()
     return listing, is_new

@@ -450,6 +450,21 @@ class WebsiteWorker:
 
   async def _execute_watch(self, tracked: TrackedListing) -> None:
     """Fetch and process a single watch check."""
+    # Guard: the classifier (or a parallel worker path) may have marked
+    # this listing terminal since it was enqueued. Verify the DB status
+    # before doing any network I/O to avoid overwriting a CANCELLED
+    # verdict with the parser-returned "active".
+    with self._database.session() as session:
+      listing_check = session.get(Listing, tracked.listing_id)
+      if listing_check is not None and listing_check.is_terminal:
+        tracked.is_terminal = True
+        logger.debug(
+          "[%s] Skipping watch for %s — already terminal (%s)",
+          self._name, tracked.external_id, listing_check.status.value,
+        )
+        self._reschedule_watch(tracked)
+        return
+
     watch_delay = (
       time.time() - tracked.next_check_at
       if tracked.next_check_at > 0 else 0.0
