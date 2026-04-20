@@ -31,6 +31,9 @@ classifier:
   threshold: 0.50           # Min CLIP score to keep a listing (0–1)
   images_directory: data/images
   max_images_per_listing: 3 # How many images to download per listing
+  # Image retention thresholds (in EUR). Set to null to disable.
+  image_min_price_eur: 50   # Listings that close below this price keep only the first image
+  image_max_price_eur: 200  # Listings whose price is already >= this at fetch time get all images
 
 scheduler:
   discovery_interval: 10m   # How often a search cycle runs per website
@@ -74,12 +77,22 @@ websites:
     monitoring_strategy: snapshot
     preferred_domain: ebay.fr
     http_warm_up: true
+    min_price_eur: 20
   leboncoin:
     enabled: true
     transport: camoufox
     monitoring_strategy: snapshot
     request_delay: 1s
     http_warm_up: true
+    min_price_eur: 20
+    age_watch_schedule:
+      - max_age: 2d
+        interval: 3h    # very fresh listing — check several times a day
+      - max_age: 7d
+        interval: 6h    # fresh listing — check several times a day
+      - max_age: 30d
+        interval: 1d    # week-old listing — once a day is enough
+      - interval: 3d    # month-old listing — check every 3 days
   drouot:
     enabled: true
     transport: http
@@ -87,6 +100,7 @@ websites:
     monitoring_strategy: post_auction
     request_delay: 2s
     http_warm_up: true
+    min_price_eur: 40
   catawiki:
     enabled: true
     transport: http
@@ -94,6 +108,7 @@ websites:
     monitoring_strategy: full
     request_delay: 2s
     http_warm_up: true
+    min_price_eur: 40
   gazette_drouot:
     enabled: false
     transport: browser
@@ -131,6 +146,15 @@ websites:
     request_delay: 1s
     preferred_domain: vinted.fr
     http_warm_up: true
+    min_price_eur: 20
+    age_watch_schedule:
+      - max_age: 2d
+        interval: 3h    # very fresh listing — check several times a day
+      - max_age: 7d
+        interval: 6h    # fresh listing — check several times a day
+      - max_age: 30d
+        interval: 1d    # week-old listing — once a day is enough
+      - interval: 3d    # month-old listing — check every 3 days
   todocoleccion:
     enabled: false
     transport: http
@@ -143,18 +167,45 @@ websites:
     fallback_transport: browser
     monitoring_strategy: snapshot
     request_delay: 3s
+    min_price_eur: 20
+    age_watch_schedule:
+      - max_age: 2d
+        interval: 3h    # very fresh listing — check several times a day
+      - max_age: 7d
+        interval: 6h    # fresh listing — check several times a day
+      - max_age: 30d
+        interval: 1d    # week-old listing — once a day is enough
+      - interval: 3d    # month-old listing — check every 3 days
   ricardo:
     enabled: true
     transport: camoufox
     monitoring_strategy: snapshot
     request_delay: 1s
     http_warm_up: true
+    min_price_eur: 20
+    age_watch_schedule:
+      - max_age: 2d
+        interval: 3h    # very fresh listing — check several times a day
+      - max_age: 7d
+        interval: 6h    # fresh listing — check several times a day
+      - max_age: 30d
+        interval: 1d    # week-old listing — once a day is enough
+      - interval: 3d    # month-old listing — check every 3 days
   subito:
     enabled: true
     transport: camoufox
     monitoring_strategy: snapshot
     request_delay: 1s
     http_warm_up: true
+    min_price_eur: 20
+    age_watch_schedule:
+      - max_age: 2d
+        interval: 3h    # very fresh listing — check several times a day
+      - max_age: 7d
+        interval: 6h    # fresh listing — check several times a day
+      - max_age: 30d
+        interval: 1d    # week-old listing — once a day is enough
+      - interval: 3d    # month-old listing — check every 3 days
   marktplaats:
     enabled: false
     transport: http

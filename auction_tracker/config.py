@@ -91,6 +91,41 @@ class MonitoringStrategy(enum.StrEnum):
   POST_AUCTION = "post_auction"
 
 
+class AgeWatchBand(BaseModel):
+  """One tier in an age-based watch interval schedule.
+
+  Fields:
+    max_age  — Upper bound for this tier (seconds or duration string).
+               Listings whose age is at or below this value use the
+               associated ``interval``.  Omit (or set to ``null``) for
+               the last catch-all tier that applies to everything older.
+    interval — How often to check listings in this tier.
+
+  Example YAML (inside a website config block)::
+
+    age_watch_schedule:
+      - max_age: 7d
+        interval: 6h
+      - max_age: 30d
+        interval: 1d
+      - interval: 3d   # listings older than 30 days
+  """
+  max_age: float | None = None
+  interval: float
+
+  @field_validator("interval", mode="before")
+  @classmethod
+  def coerce_interval(cls, value: str | float | int) -> float:
+    return parse_duration(value)
+
+  @field_validator("max_age", mode="before")
+  @classmethod
+  def coerce_max_age(cls, value) -> float | None:
+    if value is None:
+      return None
+    return parse_duration(value)
+
+
 class WebsiteConfig(BaseModel):
   """Per-website configuration."""
   enabled: bool = True
@@ -108,6 +143,31 @@ class WebsiteConfig(BaseModel):
   # avoids bot-detection "sorry" pages that eBay serves to cookieless
   # sessions. Equivalent to the browser transport's domain warm-up.
   http_warm_up: bool = False
+  # Minimum price filter (in EUR).  Listings below this threshold are
+  # immediately marked CANCELLED after their first full fetch so that
+  # cheap irrelevant items (e.g. school-supply pens) are discarded before
+  # classification and watching.
+  #
+  # The price used for the comparison depends on the listing type:
+  #   - Buy-now / classifieds: buy_now_price or current_price.
+  #   - Auctions:              estimate_low or reserve_price ONLY.
+  #     The live bid (current_price / starting_price) is deliberately
+  #     ignored because an auction can start at 1 EUR and close at
+  #     1 000 EUR.
+  # If none of the relevant price fields are populated, the filter is
+  # skipped for that listing (conservative / pass-through behaviour).
+  # Set to null to disable (default).
+  min_price_eur: float | None = None
+  # Age-based watch interval schedule.  Only affects listings that have
+  # no fixed end time (i.e. classified ads like LeBonCoin / Vinted).
+  # Bands must be ordered from youngest to oldest; the last band's
+  # ``max_age`` should be ``null`` (or omitted) to serve as a catch-all.
+  # When the list is empty the scheduler's global ``routine_interval``
+  # is used unchanged.
+  # Listing age is measured from ``start_time`` (publication date on the
+  # website) when available, otherwise from ``first_seen_at`` (when the
+  # tracker first discovered the listing).
+  age_watch_schedule: list[AgeWatchBand] = Field(default_factory=list)
 
   @field_validator("request_delay", mode="before")
   @classmethod
@@ -315,6 +375,15 @@ class ClassifierConfig(BaseModel):
   threshold: float = 0.50
   images_directory: Path = Field(default=Path("data/images"))
   max_images_per_listing: int = 3
+  # Image retention policy based on price.
+  # When a terminal listing's effective price (final_price_eur or, for
+  # classifieds, current_price_eur) is below this value (EUR), all images
+  # except the first are deleted to save storage.  None disables pruning.
+  image_min_price_eur: float | None = None
+  # When a listing's current price at classification time is at or above this
+  # value (EUR), ALL available images are downloaded instead of the
+  # max_images_per_listing cap.  None disables the expansion.
+  image_max_price_eur: float | None = None
 
 
 class DisplayConfig(BaseModel):

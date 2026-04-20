@@ -144,6 +144,7 @@ class WebsiteWorker:
     self._router = router
     self._database = database
     self._repo = repository
+    self._converter = converter
     self._ingest = Ingest(repository, converter=converter)
     self._scheduler = Scheduler(config.scheduler)
     self._parser: Parser = ParserRegistry.get(website_name)
@@ -510,6 +511,14 @@ class WebsiteWorker:
             session, tracked.listing_id, ListingStatus.SOLD,
           )
           session.commit()
+          listing_for_prune = session.get(Listing, tracked.listing_id)
+          if listing_for_prune is not None:
+            self._apply_image_retention_policy(
+              tracked.listing_id,
+              ListingStatus.SOLD,
+              listing_for_prune.final_price_eur,
+              listing_for_prune.current_price_eur,
+            )
         self._reschedule_watch(tracked)
         return
 
@@ -542,6 +551,14 @@ class WebsiteWorker:
           session, tracked.listing_id, ListingStatus.SOLD,
         )
         session.commit()
+        listing_for_prune = session.get(Listing, tracked.listing_id)
+        if listing_for_prune is not None:
+          self._apply_image_retention_policy(
+            tracked.listing_id,
+            ListingStatus.SOLD,
+            listing_for_prune.final_price_eur,
+            listing_for_prune.current_price_eur,
+          )
       self._reschedule_watch(tracked)
       return
     except Exception as exc:
@@ -637,6 +654,28 @@ class WebsiteWorker:
         )
         self._fetch_error_counts.pop(item.listing_id, None)
         session.commit()
+
+      # Per-website minimum price filter.  Applied before classification
+      # so that cheap listings never trigger an image download.
+      if self._website_config.min_price_eur is not None:
+        should_reject, reason = self._price_filter_rejects(scraped)
+        if should_reject:
+          self._stats.listings_rejected += 1
+          logger.info(
+            "[%s] Price-filtered %s [%s] — %s",
+            self._name,
+            scraped.title[:60] if scraped.title else "?",
+            item.external_id,
+            reason,
+          )
+          with self._database.session() as session:
+            self._repo.mark_listing_status(
+              session, item.listing_id, ListingStatus.CANCELLED,
+            )
+            session.commit()
+          if self._live:
+            self._live.increment("rejected")
+          return
 
       # Transaction 2: download images and classify (may await
       # network I/O, so this MUST be outside the ingest session).
@@ -922,6 +961,12 @@ class WebsiteWorker:
         "[%s] %s reached terminal: %s",
         self._name, tracked.external_id, listing.status.value,
       )
+      self._apply_image_retention_policy(
+        tracked.listing_id,
+        listing.status,
+        listing.final_price_eur,
+        listing.current_price_eur,
+      )
 
     # Detect listings stuck in ENDING phase.
     if (
@@ -941,10 +986,75 @@ class WebsiteWorker:
         self._repo.mark_listing_status(
           session, tracked.listing_id, ListingStatus.UNSOLD,
         )
+        self._apply_image_retention_policy(
+          tracked.listing_id,
+          ListingStatus.UNSOLD,
+          listing.final_price_eur,
+          listing.current_price_eur,
+        )
 
   # ------------------------------------------------------------------
-  # Classification
+  # Price filter and classification
   # ------------------------------------------------------------------
+
+  def _price_filter_rejects(self, scraped) -> tuple[bool, str]:
+    """Check the per-website minimum price filter against a scraped listing.
+
+    Returns ``(should_reject, human_readable_reason)``.
+
+    The comparison price depends on listing type:
+    - Buy-now / classifieds: ``buy_now_price`` or ``current_price``.
+    - Auctions (including hybrids without a buy-now price): only
+      ``estimate_low`` or ``reserve_price``.  The live bid
+      (``current_price`` / ``starting_price``) is intentionally
+      ignored — an auction may start at 1 EUR and close at 1 000 EUR.
+
+    When the relevant price fields are absent the filter is skipped
+    (conservative / pass-through behaviour) to avoid discarding
+    valuable listings that simply have incomplete data.
+    """
+    min_price = self._website_config.min_price_eur
+    if min_price is None or min_price <= 0:
+      return False, ""
+    if self._converter is None:
+      return False, ""
+
+    listing_type = (scraped.listing_type or "").lower()
+    currency = scraped.currency or "EUR"
+
+    # A listing is treated as buy-now when it explicitly says so OR when
+    # a buy_now_price is present regardless of type (e.g. eBay hybrid).
+    is_buy_now = listing_type == "buy_now" or scraped.buy_now_price is not None
+
+    if is_buy_now:
+      price = scraped.buy_now_price or scraped.current_price
+      if price is None:
+        return False, ""
+      price_eur, _ = self._converter.to_eur(price, currency)
+      if price_eur is None:
+        return False, ""
+      if float(price_eur) < min_price:
+        return True, (
+          f"buy-now price {float(price_eur):.0f} EUR "
+          f"< minimum {min_price:.0f} EUR"
+        )
+      return False, ""
+
+    # Auction path: only use pre-sale estimate or reserve price.
+    reference_price = scraped.estimate_low or scraped.reserve_price
+    if reference_price is None:
+      # No estimate and no reserve → cannot evaluate; let it through.
+      return False, ""
+    price_eur, _ = self._converter.to_eur(reference_price, currency)
+    if price_eur is None:
+      return False, ""
+    if float(price_eur) < min_price:
+      label = "estimate" if scraped.estimate_low else "reserve price"
+      return True, (
+        f"{label} {float(price_eur):.0f} EUR "
+        f"< minimum {min_price:.0f} EUR"
+      )
+    return False, ""
 
   async def _classify_and_filter(
     self,
@@ -959,19 +1069,48 @@ class WebsiteWorker:
     """
     from auction_tracker.orchestrator.images import (
       classify_listing as run_classification,
+      delete_listing_images,
       download_listing_images,
     )
 
+    # Determine how many images to download.  When the listing's current
+    # price already meets or exceeds the high-value threshold, download
+    # all available images instead of the default cap so that expensive
+    # items are fully archived from the start.
+    max_count: int | None = None
+    classifier_config = self._config.classifier
+    if (
+      classifier_config.image_max_price_eur is not None
+      and scraped.image_urls
+    ):
+      with self._database.session() as price_session:
+        listing_row = price_session.get(Listing, listing_id)
+        if (
+          listing_row is not None
+          and listing_row.current_price_eur is not None
+          and float(listing_row.current_price_eur) >= classifier_config.image_max_price_eur
+        ):
+          max_count = len(scraped.image_urls)
+          logger.debug(
+            "[%s] High-value listing %s (%.0f EUR >= %.0f EUR threshold) "
+            "— downloading all %d images",
+            self._name, scraped.external_id,
+            float(listing_row.current_price_eur),
+            classifier_config.image_max_price_eur,
+            max_count,
+          )
+
     # Network I/O — no DB session held.
     image_paths = await download_listing_images(
-      scraped.image_urls, listing_id, self._config.classifier,
+      scraped.image_urls, listing_id, classifier_config,
+      max_count=max_count,
     )
     if not image_paths:
       return
 
     # CPU-bound classification (synchronous, fast).
     is_relevant, score, top_classes = run_classification(
-      image_paths, self._config.classifier,
+      image_paths, classifier_config,
     )
     self._stats.listings_classified += 1
     if self._metrics:
@@ -1010,8 +1149,48 @@ class WebsiteWorker:
           "[%s] Rejected %s (score=%.0f%%): %s",
           self._name, scraped.external_id, score * 100, top_labels,
         )
+        session.commit()
+        # Free disk space immediately — the listing will never be
+        # watched so these images serve no further purpose.
+        delete_listing_images(listing_id, classifier_config)
+        return
 
       session.commit()
+
+  def _apply_image_retention_policy(
+    self,
+    listing_id: int,
+    status: ListingStatus,
+    final_price_eur,
+    current_price_eur,
+  ) -> None:
+    """Prune images for a terminal listing based on its final price.
+
+    Only applies when the classifier is active and
+    ``image_min_price_eur`` is configured.  Below that threshold all
+    images except the first cover shot are deleted to save storage.
+    Listings above ``image_max_price_eur`` had all their images
+    downloaded at classification time and are left untouched.
+    CANCELLED listings are handled separately by
+    ``_classify_and_filter`` (which deletes all images immediately).
+    """
+    if not self._classify:
+      return
+    config = self._config.classifier
+    if config.image_min_price_eur is None:
+      return
+    if status not in (ListingStatus.SOLD, ListingStatus.UNSOLD):
+      return
+
+    from auction_tracker.orchestrator.images import (
+      effective_price_eur,
+      prune_listing_images_to_first,
+    )
+    price = effective_price_eur(final_price_eur, current_price_eur)
+    if price is None:
+      return
+    if price < config.image_min_price_eur:
+      prune_listing_images_to_first(listing_id, config)
 
   # ------------------------------------------------------------------
   # Queue helpers
@@ -1021,6 +1200,25 @@ class WebsiteWorker:
     """Build a TrackedListing from a DB Listing and schedule it."""
     if self._website_config.historical_only:
       return
+
+    # Determine the listing's publication timestamp for the age-based
+    # watch schedule.  Prefer the website's own publication date
+    # (start_time); fall back to when we first discovered it.
+    published_at: float | None = None
+    if listing.start_time is not None:
+      published_at = listing.start_time.timestamp()
+    elif listing.first_seen_at is not None:
+      published_at = listing.first_seen_at.timestamp()
+
+    # Convert AgeWatchBand objects to plain tuples so that TrackedListing
+    # stays free of any config imports.
+    age_watch_schedule: list[tuple[float | None, float]] | None = None
+    if self._website_config.age_watch_schedule:
+      age_watch_schedule = [
+        (band.max_age, band.interval)
+        for band in self._website_config.age_watch_schedule
+      ]
+
     tracked = TrackedListing(
       listing_id=listing.id,
       website_name=self._name,
@@ -1035,6 +1233,8 @@ class WebsiteWorker:
         if listing.last_checked_at else 0.0
       ),
       is_terminal=listing.is_terminal,
+      published_at=published_at,
+      age_watch_schedule=age_watch_schedule,
     )
     schedule = self._scheduler.compute_next_check(tracked)
     tracked.next_check_at = schedule.next_check_at
