@@ -118,19 +118,9 @@
   <p>{{ total_count }} listing{{ "s" if total_count != 1 else "" }} found</p>
 </hgroup>
 
-{% if source_filter %}
-<article style="padding: 0.75rem 1rem; margin-bottom: 1rem;">
-  Filtered by search source: <strong>"{{ source_filter }}"</strong>
-  &mdash; <a href="/listings">clear filter</a>
-</article>
-{% endif %}
-
 <!-- Filters -->
 <form method="get" action="/listings" class="filter-form" id="filter-form">
   <input type="hidden" name="_filtered" value="1">
-  {% if source_filter %}
-  <input type="hidden" name="source" value="{{ source_filter }}">
-  {% endif %}
   <div class="filter-group-wide">
     <input type="search" name="q" value="{{ search_query }}" placeholder="Search by title&hellip;">
   </div>
@@ -189,7 +179,7 @@
     </details>
   </div>
 
-  <!-- Listing type (single select, kept as dropdown) -->
+  <!-- Listing type -->
   <div class="filter-group">
     <select name="type">
       <option value="">All types</option>
@@ -201,10 +191,24 @@
     </select>
   </div>
 
+  <!-- Source search query -->
+  {% if all_source_queries %}
+  <div class="filter-group">
+    <select name="source">
+      <option value="">All queries</option>
+      {% for query in all_source_queries %}
+      <option value="{{ query }}" {% if source_filter == query %}selected{% endif %}>
+        {{ query }}
+      </option>
+      {% endfor %}
+    </select>
+  </div>
+  {% endif %}
+
   <div>
     <button type="submit">Filter</button>
   </div>
-  {% if search_query or status_filters or website_filters or type_filter %}
+  {% if search_query or status_filters or website_filters or type_filter or source_filter %}
   <div>
     <a href="/listings" role="button" class="outline secondary">Clear</a>
   </div>

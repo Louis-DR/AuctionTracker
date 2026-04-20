@@ -314,6 +314,19 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         select(Website).order_by(Website.name)
       ).scalars().all()
 
+      # Collect all distinct source-search query texts for the dropdown.
+      _source_prefix = "source_search:"
+      raw_source_names = session.execute(
+        select(ListingAttribute.attribute_name)
+        .distinct()
+        .where(ListingAttribute.attribute_name.like(f"{_source_prefix}%"))
+        .order_by(ListingAttribute.attribute_name)
+      ).scalars().all()
+      all_source_queries = [
+        name[len(_source_prefix):]
+        for name in raw_source_names
+      ]
+
       # Build price history chart when filters are active.
       price_history_data = None
       has_filters = (
@@ -352,6 +365,7 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         website_filters=website_filters,
         type_filter=type_filter,
         source_filter=source_filter,
+        all_source_queries=all_source_queries,
         sort_by=sort_by,
         sort_dir=sort_dir,
         filter_query_string=filter_query_string,
