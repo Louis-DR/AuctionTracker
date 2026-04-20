@@ -7,6 +7,8 @@ CLIP classifier to determine if the listing shows a writing instrument.
 from __future__ import annotations
 
 import logging
+import shutil
+from decimal import Decimal
 from pathlib import Path
 
 from auction_tracker.config import ClassifierConfig
@@ -40,16 +42,21 @@ async def download_listing_images(
   image_urls: list[str],
   listing_id: int,
   config: ClassifierConfig,
+  *,
+  max_count: int | None = None,
 ) -> list[Path]:
-  """Download up to N images for a listing.
+  """Download images for a listing.
 
-  Returns paths to successfully downloaded images.
+  Downloads up to ``max_count`` images when provided, otherwise falls
+  back to ``config.max_images_per_listing``.  Returns paths to
+  successfully downloaded images.
   """
   images_dir = config.images_directory / str(listing_id)
-  max_images = min(len(image_urls), config.max_images_per_listing)
+  effective_max = max_count if max_count is not None else config.max_images_per_listing
+  count = min(len(image_urls), effective_max)
   downloaded: list[Path] = []
 
-  for index, url in enumerate(image_urls[:max_images]):
+  for index, url in enumerate(image_urls[:count]):
     extension = _guess_extension(url)
     destination = images_dir / f"{index}{extension}"
 
@@ -62,6 +69,62 @@ async def download_listing_images(
       downloaded.append(destination)
 
   return downloaded
+
+
+def delete_listing_images(listing_id: int, config: ClassifierConfig) -> None:
+  """Delete all downloaded images for a listing.
+
+  Called when the classifier rejects a listing so that disk space is
+  freed immediately rather than waiting for a manual cleanup.
+  """
+  images_dir = config.images_directory / str(listing_id)
+  if images_dir.exists():
+    shutil.rmtree(images_dir, ignore_errors=True)
+    logger.info("Deleted images for rejected listing %d", listing_id)
+
+
+def prune_listing_images_to_first(listing_id: int, config: ClassifierConfig) -> None:
+  """Delete all images except the first for a listing.
+
+  Called for low-value terminal listings to reclaim storage while
+  keeping a single reference image.
+  """
+  images_dir = config.images_directory / str(listing_id)
+  if not images_dir.exists():
+    return
+
+  # Sort by name so index 0 (the cover image) is always first.
+  all_images = sorted(images_dir.iterdir())
+  if len(all_images) <= 1:
+    return
+
+  deleted = 0
+  for image in all_images[1:]:
+    try:
+      image.unlink()
+      deleted += 1
+    except OSError:
+      logger.debug("Could not delete image %s", image)
+
+  if deleted:
+    logger.info(
+      "Pruned %d extra image(s) for low-value listing %d (kept first only)",
+      deleted, listing_id,
+    )
+
+
+def effective_price_eur(
+  final_price_eur: Decimal | None,
+  current_price_eur: Decimal | None,
+) -> float | None:
+  """Return the best available EUR price as a plain float.
+
+  Prefers ``final_price_eur``; falls back to ``current_price_eur``
+  for classifieds (buy-now items) where no separate final price is
+  recorded.
+  """
+  price = final_price_eur if final_price_eur is not None else current_price_eur
+  return float(price) if price is not None else None
 
 
 def classify_listing(

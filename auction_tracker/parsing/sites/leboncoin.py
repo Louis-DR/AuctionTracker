@@ -213,7 +213,44 @@ class LeBonCoinParser(Parser):
         f"LeBonCoin listing {list_id} is no longer available (ad=None in __NEXT_DATA__)"
       )
 
-    return _parse_ad(ad)
+    scraped = _parse_ad(ad)
+
+    # DOM-level fallback: when the seller marks an item as sold LeBonCoin
+    # renders an "Article vendu" badge on the still-accessible page.
+    # If the JSON status field didn't already reflect this, detect it from
+    # the rendered HTML so the listing is retired without waiting for the
+    # ad to eventually disappear from the API.
+    if scraped.status != "sold" and _is_sold_in_html(html):
+      scraped = scraped.model_copy(update={"status": "sold"})
+
+    return scraped
+
+
+# ------------------------------------------------------------------
+# Page-state detection helpers
+# ------------------------------------------------------------------
+
+# Markers present in the rendered HTML when a listing has been sold by
+# the seller but the page is still accessible (shows "Article vendu").
+_SOLD_HTML_MARKERS: tuple[str, ...] = (
+  # LeBonCoin's data-qa-id used for the sold label element.
+  'data-qa-id="adview_sold_label"',
+  # Visible text that appears on sold listings (case-insensitive match).
+  "article vendu",
+  # URL slug used for the sold state in some Next.js page variants.
+  "articlevendu",
+)
+
+
+def _is_sold_in_html(html: str) -> bool:
+  """Return True if the rendered HTML contains a sold-state indicator.
+
+  Used as a fallback when ``__NEXT_DATA__`` does not yet reflect the
+  sold status (e.g. the ``status`` field is still ``"active"`` but the
+  seller has just marked the item as sold).
+  """
+  lower = html.lower()
+  return any(marker in lower for marker in _SOLD_HTML_MARKERS)
 
 
 # ------------------------------------------------------------------
@@ -421,11 +458,21 @@ def _extract_price(ad: dict) -> Decimal | None:
 
 
 def _derive_status(ad: dict) -> str:
-  """Derive listing status from the ad dict."""
+  """Derive listing status from the ad dict.
+
+  LeBonCoin uses several status values in ``__NEXT_DATA__``:
+  - ``"active"`` — listing is live.
+  - ``"sold"``   — seller explicitly marked the item as sold;
+                   the page is still accessible and shows "Article vendu".
+  - ``"expired"`` / ``"deleted"`` — listing was removed or expired.
+  Some API responses use a boolean ``is_sold`` flag instead of (or in
+  addition to) the status string.
+  """
   raw_status = (ad.get("status") or "").lower()
-  if raw_status == "active":
-    return "active"
-  if raw_status in ("expired", "deleted"):
+  if raw_status in ("sold", "expired", "deleted"):
+    return "sold"
+  # Explicit boolean sold flag seen in some response variants.
+  if ad.get("is_sold") or ad.get("sold"):
     return "sold"
   return "active"
 
