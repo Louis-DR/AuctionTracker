@@ -58,6 +58,19 @@ class TrackedListing:
   extension_count: int = 0
   is_terminal: bool = False
 
+  # POSIX timestamp of when the listing was first published (website's
+  # own publication date, or discovery time as a fallback).  Used by
+  # the age-based watch-interval logic for open-ended listings (those
+  # without a fixed end time, e.g. classified ads).
+  published_at: float | None = None
+
+  # Per-website age-based schedule: ordered list of
+  # (max_age_seconds, interval_seconds) pairs.  The last entry's
+  # max_age should be None (unlimited) to serve as a catch-all.
+  # Populated from WebsiteConfig.age_watch_schedule at enqueue time.
+  # Only consulted when end_time is None.
+  age_watch_schedule: list[tuple[float | None, float]] | None = None
+
   def __lt__(self, other: TrackedListing) -> bool:
     """Comparison for the priority queue (earliest check first)."""
     return self.next_check_at < other.next_check_at
@@ -68,6 +81,29 @@ class CheckSchedule:
   """Result of a scheduling decision."""
   next_check_at: float
   phase: Phase
+
+
+def _age_based_interval(
+  age_watch_schedule: list[tuple[float | None, float]] | None,
+  published_at: float | None,
+  fallback: float,
+  now: float,
+) -> float:
+  """Return the watch interval appropriate for a listing's current age.
+
+  Walks the age-band list in order and returns the first band whose
+  ``max_age`` is ``None`` (catch-all) or is >= the listing's age.
+  Falls back to ``fallback`` when no schedule is configured or the
+  listing's publication time is unknown.
+  """
+  if not age_watch_schedule or published_at is None:
+    return fallback
+  age = now - published_at
+  for max_age, interval in age_watch_schedule:
+    if max_age is None or age <= max_age:
+      return interval
+  # All bands exhausted without a catch-all — use the last band's interval.
+  return age_watch_schedule[-1][1]
 
 
 class Scheduler:
@@ -167,17 +203,28 @@ class Scheduler:
     )
 
   def _schedule_snapshot(self, tracked: TrackedListing, now: float) -> CheckSchedule:
-    """Schedule for SNAPSHOT strategy (e.g. eBay, Yahoo Japan).
+    """Schedule for SNAPSHOT strategy (e.g. eBay, Yahoo Japan, classifieds).
 
     Periodic snapshots that tighten near the end. No extension
     detection — if end time changes by more than a threshold, the
     schedule adjusts but does not treat it as an extension.
+
+    For listings without a fixed end time (classified ads), the
+    routine interval is taken from the per-website age-based schedule
+    (``tracked.age_watch_schedule``) when configured, so that stale
+    listings are checked less frequently than fresh ones.
     """
     config = self._config.snapshot
 
     if tracked.end_time is None:
+      interval = _age_based_interval(
+        tracked.age_watch_schedule,
+        tracked.published_at,
+        config.routine_interval,
+        now,
+      )
       return CheckSchedule(
-        next_check_at=now + config.routine_interval,
+        next_check_at=now + interval,
         phase=Phase.ROUTINE,
       )
 
