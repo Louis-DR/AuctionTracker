@@ -661,8 +661,12 @@ def fix_database(app: AppContext) -> None:
   3. Re-apply classifier verdicts: listings with classifier_accepted=0
      whose status was reverted to active by the watch cycle are reset
      back to cancelled.
+  4. Reset LeBonCoin listings that were wrongly flagged as SOLD by the
+     over-broad HTML sold-badge heuristic back to ACTIVE so the watch
+     cycle can re-evaluate them using the authoritative JSON status.
   """
   import json
+  from datetime import datetime, timedelta
 
   from sqlalchemy import select
 
@@ -671,6 +675,7 @@ def fix_database(app: AppContext) -> None:
     ListingAttribute,
     ListingStatus,
     PipelineEvent,
+    Website,
   )
 
   cancel_file = Path(app.config.database.path.parent / "manual_cancel_listings.txt")
@@ -796,6 +801,57 @@ def fix_database(app: AppContext) -> None:
         )
       else:
         console.print("[dim]All classifier-rejected listings are already in a terminal state.[/dim]")
+
+  # ------------------------------------------------------------------
+  # Step 4: revert LeBonCoin SOLD false positives
+  # ------------------------------------------------------------------
+  # A previous version of the LeBonCoin parser used an HTML-scanning
+  # fallback to detect the "Article vendu" sold badge. The markers it
+  # looked for (notably the substrings "article vendu" and
+  # "articlevendu") occur naturally in related-listing cards and in the
+  # inline Next.js state blob, so thousands of still-active listings
+  # were marked SOLD.
+  #
+  # Reset all LeBonCoin listings currently marked SOLD whose status
+  # was last modified within the regression window.  The next watch
+  # cycle will re-fetch them and the tightened parser will only mark
+  # them SOLD when the JSON status field explicitly says so (or the
+  # worker receives HTTP 410 / ad=None via ListingGone).
+  #
+  # Listings whose updated_at falls before the window are left alone
+  # on the assumption that they were genuinely sold before the bug
+  # was introduced.
+  # ------------------------------------------------------------------
+  # Regression was introduced with the HTML-fallback commit; use a
+  # generous two-week window to cover all affected listings without
+  # re-opening long-closed sales.
+  regression_cutoff = datetime.utcnow() - timedelta(days=14)
+
+  with app.database.session() as session:
+    leboncoin_website = session.execute(
+      select(Website).where(Website.name == "leboncoin")
+    ).scalar_one_or_none()
+
+    if leboncoin_website is None:
+      console.print("[dim]LeBonCoin website not configured — skipping step 4.[/dim]")
+    else:
+      result = session.execute(
+        _sa_update(Listing)
+        .where(Listing.website_id == leboncoin_website.id)
+        .where(Listing.status == ListingStatus.SOLD)
+        .where(Listing.updated_at >= regression_cutoff)
+        .values(status=ListingStatus.ACTIVE)
+      )
+      reverted_count = result.rowcount
+      if reverted_count:
+        session.commit()
+        console.print(
+          f"[green]Reverted {reverted_count} LeBonCoin listings from SOLD "
+          f"back to ACTIVE (since {regression_cutoff.date().isoformat()}). "
+          f"They will be re-evaluated on the next watch cycle.[/green]"
+        )
+      else:
+        console.print("[dim]No recent LeBonCoin SOLD listings to revert.[/dim]")
 
 
 # -------------------------------------------------------------------
