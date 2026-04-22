@@ -122,7 +122,7 @@ websites:
     monitoring_strategy: post_auction
     request_delay: 2s
   invaluable:
-    enabled: false
+    enabled: true
     transport: http
     fallback_transport: browser
     monitoring_strategy: post_auction
@@ -156,11 +156,15 @@ websites:
         interval: 1d    # week-old listing — once a day is enough
       - interval: 3d    # month-old listing — check every 3 days
   todocoleccion:
-    enabled: false
-    transport: http
-    fallback_transport: browser
+    enabled: true
+    # Cloudflare aggressively blocks curl_cffi and vanilla Playwright
+    # on this domain (every HTTP response is the "Access denied"
+    # challenge page).  Camoufox (undetectable Firefox) passes the
+    # challenge like the other heavily-protected classifieds sites.
+    transport: camoufox
     monitoring_strategy: snapshot
-    request_delay: 4s
+    request_delay: 2s
+    http_warm_up: true
   kleinanzeigen:
     enabled: true
     transport: http
@@ -207,7 +211,7 @@ websites:
         interval: 1d    # week-old listing — once a day is enough
       - interval: 3d    # month-old listing — check every 3 days
   marktplaats:
-    enabled: false
+    enabled: true
     transport: http
     fallback_transport: browser
     monitoring_strategy: snapshot
