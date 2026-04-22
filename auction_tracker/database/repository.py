@@ -183,8 +183,25 @@ class Repository:
     session: Session,
     website_name: str | None = None,
   ) -> Sequence[Listing]:
-    """Get listings discovered but not yet fully fetched."""
-    statement = select(Listing).where(Listing.is_fully_fetched.is_(False))
+    """Get listings discovered but not yet fully fetched.
+
+    Terminal listings (SOLD / UNSOLD / CANCELLED) are excluded even when
+    their ``is_fully_fetched`` flag is still False — this happens when a
+    fetch is short-circuited by the 404 / 403 / ListingGone paths before
+    the ingest transaction runs.  Without this filter those rows would
+    be re-enqueued on every search cycle and a worker with a large
+    watch queue could starve on ghost fetches indefinitely.
+    """
+    terminal_statuses = (
+      ListingStatus.SOLD,
+      ListingStatus.UNSOLD,
+      ListingStatus.CANCELLED,
+    )
+    statement = (
+      select(Listing)
+      .where(Listing.is_fully_fetched.is_(False))
+      .where(Listing.status.not_in(terminal_statuses))
+    )
     if website_name is not None:
       statement = statement.join(Website).where(Website.name == website_name)
     return session.scalars(statement).all()
@@ -195,10 +212,24 @@ class Repository:
     listing_id: int,
     status: ListingStatus,
     final_price: float | None = None,
+    fully_fetched: bool | None = None,
   ) -> None:
-    values: dict = {"status": status, "last_checked_at": datetime.now(UTC).replace(tzinfo=None)}
+    """Update status (and optionally ``final_price`` / ``is_fully_fetched``).
+
+    Pass ``fully_fetched=True`` when the status transition itself is a
+    complete verdict on the listing (e.g. mark CANCELLED after a 404
+    during the initial fetch) — this stops the listing from being
+    re-enqueued by ``get_listings_needing_fetch`` on the next search
+    cycle.
+    """
+    values: dict = {
+      "status": status,
+      "last_checked_at": datetime.now(UTC).replace(tzinfo=None),
+    }
     if final_price is not None:
       values["final_price"] = final_price
+    if fully_fetched is not None:
+      values["is_fully_fetched"] = fully_fetched
     session.execute(
       update(Listing).where(Listing.id == listing_id).values(**values)
     )

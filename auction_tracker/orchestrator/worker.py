@@ -715,6 +715,7 @@ class WebsiteWorker:
         with self._database.session() as session:
           self._repo.mark_listing_status(
             session, item.listing_id, ListingStatus.CANCELLED,
+            fully_fetched=True,
           )
           session.commit()
         return
@@ -735,6 +736,7 @@ class WebsiteWorker:
         with self._database.session() as session:
           self._repo.mark_listing_status(
             session, item.listing_id, ListingStatus.CANCELLED,
+            fully_fetched=True,
           )
           session.commit()
         return
@@ -747,6 +749,7 @@ class WebsiteWorker:
         with self._database.session() as session:
           self._repo.mark_listing_status(
             session, item.listing_id, ListingStatus.CANCELLED,
+            fully_fetched=True,
           )
           session.commit()
         return
