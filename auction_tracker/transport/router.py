@@ -159,9 +159,13 @@ class TransportRouter:
     try:
       return await primary.fetch(url, **kwargs)
     except (TransportBlocked, TransportError) as exc:
-      # A 404 is a definitive server response — the fallback transport would
-      # receive the same reply, so there is no point attempting it.
-      if getattr(exc, "status_code", None) == 404:
+      # 404 Not Found and 410 Gone are both definitive "the server
+      # knows this URL does not exist / has been removed" responses —
+      # the fallback transport would receive the same reply, so there
+      # is no point retrying and no point downloading the body (which
+      # is often a generic "listing not available" page that the
+      # parser would then misinterpret).
+      if getattr(exc, "status_code", None) in (404, 410):
         raise
       fallback = await self._resolve_fallback(website_config, primary, url, website_name)
       if fallback is not None:
