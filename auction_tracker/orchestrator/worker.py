@@ -513,12 +513,18 @@ class WebsiteWorker:
       )
       self._flush_utilization()
     except (TransportError, ParserBlocked) as exc:
-      # A 404 means the listing page no longer exists on the server — treat
-      # it as cancelled regardless of monitoring strategy or website.
-      if isinstance(exc, TransportError) and exc.status_code == 404:
+      # A 404 Not Found or 410 Gone means the listing page no longer
+      # exists on the server — treat it as cancelled regardless of
+      # monitoring strategy or website.  410 is sent by classifieds
+      # sites (e.g. Marktplaats) when the seller removes an ad; 404 is
+      # more generic.
+      if (
+        isinstance(exc, TransportError)
+        and exc.status_code in (404, 410)
+      ):
         logger.info(
-          "[%s] Listing %s is gone (HTTP 404) — marking as cancelled",
-          self._name, tracked.external_id,
+          "[%s] Listing %s is gone (HTTP %d) — marking as cancelled",
+          self._name, tracked.external_id, exc.status_code,
         )
         tracked.is_terminal = True
         with self._database.session() as session:
@@ -743,10 +749,13 @@ class WebsiteWorker:
     except Exception as exc:
       # A 404 means the listing page no longer exists — mark cancelled
       # immediately without counting as an error.
-      if isinstance(exc, TransportError) and exc.status_code == 404:
+      if (
+        isinstance(exc, TransportError)
+        and exc.status_code in (404, 410)
+      ):
         logger.info(
-          "[%s] New listing %s not found (HTTP 404) — marking cancelled",
-          self._name, item.external_id,
+          "[%s] New listing %s not found (HTTP %d) — marking cancelled",
+          self._name, item.external_id, exc.status_code,
         )
         with self._database.session() as session:
           self._repo.mark_listing_status(
