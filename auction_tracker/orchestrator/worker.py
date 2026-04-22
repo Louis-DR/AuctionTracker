@@ -190,6 +190,10 @@ class WebsiteWorker:
     self._in_tick: bool = False
     self._last_heartbeat: float = 0.0
     self._ticks_since_heartbeat: int = 0
+    # Monotonic counter used to rotate priority between due watches and
+    # pending fetches when both have work.  See the _tick scheduler
+    # below for details.
+    self._scheduling_counter: int = 0
 
   @property
   def name(self) -> str:
@@ -330,12 +334,44 @@ class WebsiteWorker:
   # Tick: pick the single highest-priority task
   # ------------------------------------------------------------------
 
+  # Scheduling fairness: every N ticks where both a due watch and a
+  # pending fetch exist, process the fetch first so a heavy watch queue
+  # cannot indefinitely starve discoveries that have not been enriched
+  # yet.  ``4`` means roughly one-in-four ticks flips priority, giving
+  # fetches about 25 % of the processing budget when competing with
+  # always-due watches.  Completely due-watch-free ticks still fall
+  # through to fetches at full speed.
+  _FETCH_PRIORITY_EVERY_N_TICKS: int = 4
+
   async def _tick(self) -> bool:
     """Execute one unit of work. Returns True if a request was made."""
     now = time.time()
+    self._scheduling_counter += 1
+
+    due = self._watch_queue.pop_due(now)
+
+    # Fairness rotation: when both a due watch and a pending fetch have
+    # work, periodically pick the fetch first.  Otherwise the worker
+    # would spend 100 % of its ticks on watches once the watch queue
+    # grows faster than it can drain (observed on LeBonCoin/Vinted where
+    # the age-based schedule makes thousands of snapshot checks come
+    # due at once).
+    prefer_fetch = (
+      bool(self._fetch_queue)
+      and bool(due)
+      and self._scheduling_counter % self._FETCH_PRIORITY_EVERY_N_TICKS == 0
+    )
+    if prefer_fetch:
+      # Return the popped watches to the queue — they will be picked up
+      # on the next tick.  One fetch runs now.
+      for tracked in due:
+        self._watch_queue.add_or_update(tracked)
+      item = self._fetch_queue[0]
+      self._report_activity("fetch", item.external_id)
+      await self._execute_fetch()
+      return True
 
     # Priority 1: most-urgent due watch check.
-    due = self._watch_queue.pop_due(now)
     if due:
       due.sort(key=lambda tracked: (
         _PHASE_PRIORITY.get(tracked.phase, 99),
