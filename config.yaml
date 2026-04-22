@@ -124,7 +124,13 @@ websites:
   invaluable:
     enabled: true
     transport: http
-    fallback_transport: browser
+    # Invaluable serves HTTP 200 with a cached/stripped shell page once
+    # rate-limiting kicks in (no __PRELOADED_STATE__, no lotData).  The
+    # HTTP fallback was previously plain Playwright, which hits the
+    # same soft-block.  Camoufox passes the challenge — the parser
+    # now raises ParserBlocked on stripped responses so the router
+    # retries the same URL via this fallback automatically.
+    fallback_transport: camoufox
     monitoring_strategy: post_auction
     request_delay: 2s
     http_warm_up: true
@@ -156,11 +162,15 @@ websites:
         interval: 1d    # week-old listing — once a day is enough
       - interval: 3d    # month-old listing — check every 3 days
   todocoleccion:
-    enabled: true
-    # Cloudflare aggressively blocks curl_cffi and vanilla Playwright
-    # on this domain (every HTTP response is the "Access denied"
-    # challenge page).  Camoufox (undetectable Firefox) passes the
-    # challenge like the other heavily-protected classifieds sites.
+    # Disabled: the website owner has manually banned this IP address
+    # at the Cloudflare edge (HTTP 403, Cloudflare Error 1006: "The
+    # owner of this website (www.todocoleccion.net) has banned your
+    # IP address").  No transport choice, TLS fingerprint, browser
+    # automation, or cookie state can bypass an IP-level deny-list
+    # entry — the block happens before the request even reaches the
+    # origin.  Re-enable after either the ban is lifted or the
+    # deployment moves behind a proxy / VPN with a clean IP.
+    enabled: false
     transport: camoufox
     monitoring_strategy: snapshot
     request_delay: 2s
