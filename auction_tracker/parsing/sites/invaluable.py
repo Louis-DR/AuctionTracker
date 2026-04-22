@@ -23,6 +23,7 @@ from decimal import Decimal, InvalidOperation
 
 from auction_tracker.parsing.base import (
   Parser,
+  ParserBlocked,
   ParserCapabilities,
   ParserRegistry,
   check_html_for_blocking,
@@ -148,9 +149,17 @@ class InvaluableParser(Parser):
     """Parse a lot detail page from embedded __PRELOADED_STATE__."""
     check_html_for_blocking(html, url=url)
     preloaded = _extract_preloaded_state(html)
+    # When Invaluable soft-blocks us (rate-limit / behavioural challenge
+    # returned with HTTP 200), the response is either an empty shell
+    # page or a cached marketing page without the SSR-injected lot
+    # payload.  Raise ParserBlocked so the caller knows to retry on the
+    # fallback transport (camoufox) rather than counting it as a hard
+    # parser error and parking the listing.
     if preloaded is None:
-      raise ValueError(
-        "Could not extract __PRELOADED_STATE__ from Invaluable page"
+      raise ParserBlocked(
+        "Invaluable page has no __PRELOADED_STATE__ "
+        "(likely a rate-limit / soft-block response)",
+        url=url,
       )
 
     pdp = preloaded.get("pdp", {})
@@ -161,7 +170,11 @@ class InvaluableParser(Parser):
     payment_terms = pdp.get("paymentAndTermsDetail", {})
 
     if not lot_data:
-      raise ValueError("No lotData found in Invaluable page")
+      raise ParserBlocked(
+        "Invaluable page has __PRELOADED_STATE__ but no lotData "
+        "(partial / stripped response, likely a soft-block)",
+        url=url,
+      )
 
     external_id = lot_data.get("lotRef", "")
     title = lot_data.get("lotTitle", "(no title)")

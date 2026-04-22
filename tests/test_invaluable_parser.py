@@ -229,7 +229,8 @@ class TestActiveLot:
     assert "buyer_premium_tiers" in listing.attributes
 
   def test_no_preloaded_state_raises(self, parser: InvaluableParser):
-    with pytest.raises(ValueError, match="__PRELOADED_STATE__"):
+    from auction_tracker.parsing.base import ParserBlocked
+    with pytest.raises(ParserBlocked, match="__PRELOADED_STATE__"):
       parser.parse_listing("<html><body>empty</body></html>")
 
 
