@@ -1254,11 +1254,40 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       ), {"since": since_naive}).scalar() or 0
 
       # ---- Pending fetches ----
-      pending_fetches = session.execute(
+      # Matches the worker's get_listings_needing_fetch scope: only
+      # counts listings that an enabled worker will actually try to
+      # fetch.  This means:
+      #   - is_fully_fetched == False           (never enriched)
+      #   - status NOT IN terminal states        (not already cancelled /
+      #                                           sold / unsold)
+      #   - website is currently enabled         (no point counting rows
+      #                                           for disabled scrapers)
+      # Without the terminal-status filter we would double-count items
+      # that were short-circuited to CANCELLED by the 404 / 403 /
+      # ListingGone paths before ingest ever flipped is_fully_fetched;
+      # without the enabled-website filter the top counter would wildly
+      # exceed the sum of the workers' in-memory fetch queues shown in
+      # the activity chart.
+      enabled_website_names = [
+        name for name, website_cfg in config.websites.items()
+        if website_cfg.enabled
+      ]
+      terminal_statuses = (
+        ListingStatus.SOLD,
+        ListingStatus.UNSOLD,
+        ListingStatus.CANCELLED,
+      )
+      pending_fetches_query = (
         select(func.count(Listing.id))
+        .join(Website)
         .where(Listing.is_fully_fetched.is_(False))
-        .where(Listing.status != ListingStatus.CANCELLED)
-      ).scalar() or 0
+        .where(Listing.status.not_in(terminal_statuses))
+      )
+      if enabled_website_names:
+        pending_fetches_query = pending_fetches_query.where(
+          Website.name.in_(enabled_website_names)
+        )
+      pending_fetches = session.execute(pending_fetches_query).scalar() or 0
 
       # ---- Upcoming auctions (LIMIT 50, already fast) ----
       upcoming_listings = session.execute(
