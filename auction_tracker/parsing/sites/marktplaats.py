@@ -26,6 +26,7 @@ from urllib.parse import quote_plus
 from selectolax.parser import HTMLParser
 
 from auction_tracker.parsing.base import (
+  ListingGone,
   Parser,
   ParserCapabilities,
   ParserRegistry,
@@ -176,8 +177,21 @@ class MarktplaatsParser(Parser):
     tree = HTMLParser(html)
 
     config = _extract_braced_json_object(html, "window.__CONFIG__ = ")
-    if not config or "listing" not in config:
-      raise ValueError("No window.__CONFIG__.listing found on page")
+    # When Marktplaats serves an HTTP 410 "Gone" page the response
+    # still contains the global ``window.__CONFIG__`` object (site
+    # navigation, feature flags, …) but the listing-specific payload
+    # is stripped.  The router already treats 410 as a no-fallback
+    # terminal signal, but a browser fallback that ignored the status
+    # code (or a future transport change) could still deliver the
+    # body here — in that case we raise ListingGone so the worker
+    # marks the listing as cancelled without counting it as an error.
+    if not config:
+      raise ValueError("No window.__CONFIG__ found on page")
+    if "listing" not in config:
+      raise ListingGone(
+        "Marktplaats listing page has no 'listing' payload "
+        "(typical HTTP 410 body — ad removed by seller)",
+      )
 
     listing = config["listing"]
     item_id = listing.get("itemId", "")
