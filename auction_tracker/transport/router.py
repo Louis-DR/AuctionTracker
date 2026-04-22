@@ -137,7 +137,13 @@ class TransportRouter:
       return await self._ensure_camoufox()
     return self._get_transport(kind)
 
-  async def fetch(self, website_name: str, url: str, **kwargs) -> FetchResult:
+  async def fetch(
+    self,
+    website_name: str,
+    url: str,
+    force_fallback: bool = False,
+    **kwargs,
+  ) -> FetchResult:
     """Fetch a URL using the transport configured for the given website.
 
     The browser transport is started lazily on first use, so HTTP-only
@@ -145,8 +151,32 @@ class TransportRouter:
 
     If the primary transport raises TransportBlocked and a fallback
     is configured, retries with the fallback transport.
+
+    ``force_fallback=True`` skips the primary transport entirely and
+    uses the website's fallback transport directly.  This is what
+    callers pass after catching a ``ParserBlocked`` — the primary
+    already returned HTTP 200 with a soft-block body, so retrying it
+    with the same transport would produce the same result.
     """
     website_config = self._config.website(website_name)
+
+    if force_fallback:
+      if website_config.fallback_transport is None:
+        raise RuntimeError(
+          f"force_fallback=True but no fallback_transport is configured "
+          f"for {website_name}"
+        )
+      transport = await self._get_transport_async(
+        website_config.fallback_transport,
+      )
+      if (
+        website_config.fallback_transport
+        in (TransportKind.BROWSER, TransportKind.CAMOUFOX)
+        or website_config.http_warm_up
+      ):
+        kwargs.setdefault("warm_up", True)
+      return await transport.fetch(url, **kwargs)
+
     primary = await self._get_transport_async(website_config.transport)
 
     # Enable warm-up (homepage visit to establish cookies) for transports
@@ -171,6 +201,13 @@ class TransportRouter:
       if fallback is not None:
         return await fallback.fetch(url, **kwargs)
       raise
+
+  def has_fallback_transport(self, website_name: str) -> bool:
+    """Return True iff the website has a distinct fallback transport."""
+    website_config = self._config.website(website_name)
+    if website_config.fallback_transport is None:
+      return False
+    return website_config.fallback_transport != website_config.transport
 
   async def _resolve_fallback(
     self,

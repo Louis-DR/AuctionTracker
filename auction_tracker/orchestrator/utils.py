@@ -55,6 +55,34 @@ async def fetch_and_parse_listing(
   if last_blocked is None:
     raise RuntimeError("Unreachable")
 
+  # Soft-block recovery: if the primary transport returned HTTP 200 with
+  # a body that the parser recognised as blocked/stripped, retry the
+  # same URL via the website's fallback transport (e.g. camoufox for an
+  # HTTP-primary site).  The router does not trigger fallback on its
+  # own here because no TransportError was raised — the body just had
+  # no usable data.  Tried BEFORE the domain-fallback list so that a
+  # Cloudflare-style soft block on ebay.fr does not have to exhaust
+  # every regional domain before we switch to a real browser.
+  if router.has_fallback_transport(website_name):
+    fetch_url = parser.build_fetch_url(url)
+    logger.info(
+      "Parser reported block on %s (%s) — retrying via fallback transport",
+      website_name, url,
+    )
+    try:
+      result = await router.fetch(website_name, fetch_url, force_fallback=True)
+      scraped = parser.parse_listing(result.html, url=url)
+      logger.info(
+        "Fallback transport succeeded for %s on %s", url, website_name,
+      )
+      scraped = await _fetch_full_bid_history(router, parser, website_name, scraped)
+      return result, scraped
+    except ParserBlocked as blocked:
+      last_blocked = blocked
+      logger.debug(
+        "Fallback transport also produced a parser block for %s", url,
+      )
+
   for fallback_url in last_blocked.fallback_urls:
     logger.info(
       "Retrying blocked URL %s with fallback %s",
