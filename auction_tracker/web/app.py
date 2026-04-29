@@ -1653,35 +1653,50 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
         .group_by(ListingAttribute.attribute_name)
       ).all())
 
-      rejected_counts = dict(session.execute(
+      # Count listings per source-search query that were accepted by the
+      # classifier (classifier_accepted = "1").
+      _accepted_per_query = dict(session.execute(
         select(
           ListingAttribute.attribute_name,
           func.count(func.distinct(Listing.id)),
         )
         .join(Listing, Listing.id == ListingAttribute.listing_id)
         .where(ListingAttribute.attribute_name.like(f"{source_prefix}%"))
-        .where(Listing.status == ListingStatus.CANCELLED)
         .where(
           Listing.id.in_(
-            select(ListingAttribute.listing_id).where(
-              ListingAttribute.attribute_name.like("classifier_%")
-            )
+            select(ListingAttribute.listing_id)
+            .where(ListingAttribute.attribute_name == "classifier_accepted")
+            .where(ListingAttribute.attribute_value == "1")
           )
         )
         .group_by(ListingAttribute.attribute_name)
       ).all())
 
-      rejection_rate_data = []
+      acceptance_rate_data = []
       for query in sorted_query_keys:
         attr_name = f"{source_prefix}{query}"
         verified = verified_counts.get(attr_name, 0)
-        rejected = rejected_counts.get(attr_name, 0)
-        rate = round(100.0 * rejected / verified, 1) if verified else 0.0
-        rejection_rate_data.append({
+        accepted = _accepted_per_query.get(attr_name, 0)
+        rate = round(100.0 * accepted / verified, 1) if verified else 0.0
+        acceptance_rate_data.append({
           "query": query,
           "rate": rate,
-          "rejected": rejected,
+          "accepted": accepted,
           "verified": verified,
+        })
+
+      sale_rate_data = []
+      for query in sorted_query_keys:
+        sold = search_listing_data[query].get("sold", 0)
+        unsold = search_listing_data[query].get("unsold", 0)
+        ended = sold + unsold
+        rate = round(100.0 * sold / ended, 1) if ended else 0.0
+        sale_rate_data.append({
+          "query": query,
+          "rate": rate,
+          "sold": sold,
+          "unsold": unsold,
+          "ended": ended,
         })
 
       # New listings per search query over time — capped to last 90 days
@@ -1860,7 +1875,8 @@ def create_app(config: AppConfig | None = None, config_path: Path | None = None)
       "recent_errors": recent_errors,
       "new_listings_timeseries": new_listings_timeseries,
       "status_bar_data": status_bar_data,
-      "rejection_rate_data": rejection_rate_data,
+      "acceptance_rate_data": acceptance_rate_data,
+      "sale_rate_data": sale_rate_data,
       "score_histogram": score_histogram,
       "top_categories": top_categories,
       "classification_timeseries": classification_timeseries,

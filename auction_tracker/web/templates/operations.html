@@ -525,7 +525,8 @@
     <div class="chart-tab-nav" data-group="search-charts">
       <button class="active" data-panel="search-timeseries">New Listings Over Time</button>
       <button data-panel="search-status-bar">Listings by Status</button>
-      <button data-panel="search-rejection">Rejection Rate</button>
+      <button data-panel="search-acceptance">Acceptance Rate</button>
+      <button data-panel="search-sale-rate">Sale Rate</button>
     </div>
     <div class="chart-tab-panel active" id="panel-search-timeseries">
       <div class="chart-container">
@@ -548,18 +549,34 @@
         </div>
       </div>
     </div>
-    <div class="chart-tab-panel" id="panel-search-rejection">
+    <div class="chart-tab-panel" id="panel-search-acceptance">
       <div class="chart-container category-chart-viewport">
         <div class="category-chart-row">
           <div class="category-chart-plot">
             <div class="category-chart-canvas-host">
-              <canvas id="searchRejectionChart"></canvas>
+              <canvas id="searchAcceptanceChart"></canvas>
             </div>
           </div>
           <div class="category-vscroll-wrap">
-            <input type="range" id="searchRejectionScrollRange" class="category-vscroll-range"
+            <input type="range" id="searchAcceptanceScrollRange" class="category-vscroll-range"
                    orient="vertical" min="0" max="0" value="0" step="1"
-                   aria-label="Scroll rejection list" style="display: none;" />
+                   aria-label="Scroll acceptance list" style="display: none;" />
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="chart-tab-panel" id="panel-search-sale-rate">
+      <div class="chart-container category-chart-viewport">
+        <div class="category-chart-row">
+          <div class="category-chart-plot">
+            <div class="category-chart-canvas-host">
+              <canvas id="searchSaleRateChart"></canvas>
+            </div>
+          </div>
+          <div class="category-vscroll-wrap">
+            <input type="range" id="searchSaleRateScrollRange" class="category-vscroll-range"
+                   orient="vertical" min="0" max="0" value="0" step="1"
+                   aria-label="Scroll sale rate list" style="display: none;" />
           </div>
         </div>
       </div>
@@ -1310,22 +1327,22 @@ document.querySelector('#group-search-terms .chart-tab-nav')?.addEventListener('
   });
 });
 
-// -- Search: Rejection rate (horizontal bar) --
-let searchRejectionChart;
-let searchRejectionVP;
-let searchRejectionRawData;
+// -- Search: Acceptance rate (horizontal bar) --
+let searchAcceptanceChart;
+let searchAcceptanceVP;
+let searchAcceptanceRawData;
 (function() {
-  searchRejectionRawData = {{ rejection_rate_data|tojson_safe }};
-  searchRejectionVP = makeViewportChart(
-    'searchRejectionChart',
-    'searchRejectionScrollRange',
-    '#panel-search-rejection .category-vscroll-wrap',
+  searchAcceptanceRawData = {{ acceptance_rate_data|tojson_safe }};
+  searchAcceptanceVP = makeViewportChart(
+    'searchAcceptanceChart',
+    'searchAcceptanceScrollRange',
+    '#panel-search-acceptance .category-vscroll-wrap',
     canvas => new Chart(canvas, {
       type: 'bar',
       data: {
         labels: [],
         datasets: [{
-          label: 'Rejection Rate (%)',
+          label: 'Acceptance Rate (%)',
           data: [],
           backgroundColor: [],
           borderRadius: 3,
@@ -1345,9 +1362,9 @@ let searchRejectionRawData;
             callbacks: {
               label: function(ctx) {
                 const query = ctx.label;
-                const item  = searchRejectionRawData.find(d => d.query === query);
+                const item  = searchAcceptanceRawData.find(d => d.query === query);
                 if (!item) return ctx.formattedValue + '%';
-                return item.rate + '% (' + item.rejected + '/' + item.verified + ' verified)';
+                return item.rate + '% (' + item.accepted + '/' + item.verified + ' classified)';
               },
             },
           },
@@ -1355,24 +1372,91 @@ let searchRejectionRawData;
       },
     })
   );
-  searchRejectionChart = searchRejectionVP.chart;
-  // Sort ascending so highest rate is at the top.
-  const sorted = [...searchRejectionRawData].sort((a, b) => a.rate - b.rate);
-  searchRejectionVP.refresh(sorted, d => d.query, (ch, items) => {
+  searchAcceptanceChart = searchAcceptanceVP.chart;
+  // Sort ascending so lowest acceptance rate is at the top.
+  const sortedAcc = [...searchAcceptanceRawData].sort((a, b) => a.rate - b.rate);
+  searchAcceptanceVP.refresh(sortedAcc, d => d.query, (ch, items) => {
     const rates = items.map(d => d.rate);
     ch.data.datasets[0].data = rates;
     ch.data.datasets[0].backgroundColor = rates.map(
-      r => r > 50 ? PALETTE.chart.errors : r > 20 ? PALETTE.chart.error_rate : PALETTE.chart.accepted
+      r => r >= 80 ? PALETTE.chart.accepted : r >= 50 ? PALETTE.chart.error_rate : PALETTE.chart.errors
     );
   });
 })();
 
 document.querySelector('#group-search-terms .chart-tab-nav')?.addEventListener('click', event => {
-  if (!event.target.closest('button[data-panel="search-rejection"]')) return;
+  if (!event.target.closest('button[data-panel="search-acceptance"]')) return;
   requestAnimationFrame(() => {
-    if (!searchRejectionVP) return;
-    searchRejectionChart.resize();
-    searchRejectionVP.reflow();
+    if (!searchAcceptanceVP) return;
+    searchAcceptanceChart.resize();
+    searchAcceptanceVP.reflow();
+  });
+});
+
+// -- Search: Sale rate (horizontal bar) --
+let searchSaleRateChart;
+let searchSaleRateVP;
+let searchSaleRateRawData;
+(function() {
+  searchSaleRateRawData = {{ sale_rate_data|tojson_safe }};
+  searchSaleRateVP = makeViewportChart(
+    'searchSaleRateChart',
+    'searchSaleRateScrollRange',
+    '#panel-search-sale-rate .category-vscroll-wrap',
+    canvas => new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'Sale Rate (%)',
+          data: [],
+          backgroundColor: [],
+          borderRadius: 3,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        scales: {
+          x: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
+          y: { ticks: { autoSkip: false, font: { size: 9 } } },
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const query = ctx.label;
+                const item  = searchSaleRateRawData.find(d => d.query === query);
+                if (!item) return ctx.formattedValue + '%';
+                if (!item.ended) return 'No ended listings';
+                return item.rate + '% (' + item.sold + ' sold / ' + item.ended + ' ended)';
+              },
+            },
+          },
+        },
+      },
+    })
+  );
+  searchSaleRateChart = searchSaleRateVP.chart;
+  // Sort ascending so lowest sale rate is at the top.
+  const sortedSr = [...searchSaleRateRawData].sort((a, b) => a.rate - b.rate);
+  searchSaleRateVP.refresh(sortedSr, d => d.query, (ch, items) => {
+    const rates = items.map(d => d.rate);
+    ch.data.datasets[0].data = rates;
+    ch.data.datasets[0].backgroundColor = rates.map(
+      r => r >= 70 ? PALETTE.chart.accepted : r >= 40 ? PALETTE.chart.error_rate : PALETTE.chart.errors
+    );
+  });
+})();
+
+document.querySelector('#group-search-terms .chart-tab-nav')?.addEventListener('click', event => {
+  if (!event.target.closest('button[data-panel="search-sale-rate"]')) return;
+  requestAnimationFrame(() => {
+    if (!searchSaleRateVP) return;
+    searchSaleRateChart.resize();
+    searchSaleRateVP.reflow();
   });
 });
 
@@ -1773,17 +1857,30 @@ function updateCharts(data) {
     });
   }
 
-  // Search terms: rejection rate
-  const rrd = (data.rejection_rate_data || []).slice();
-  if (searchRejectionVP && rrd.length) {
-    searchRejectionRawData = rrd;
-    // Sort ascending so highest rate ends up at the top of the chart.
-    const sortedRrd = [...rrd].sort((a, b) => a.rate - b.rate);
-    searchRejectionVP.refresh(sortedRrd, d => d.query, (ch, items) => {
+  // Search terms: acceptance rate
+  const ard = (data.acceptance_rate_data || []).slice();
+  if (searchAcceptanceVP && ard.length) {
+    searchAcceptanceRawData = ard;
+    const sortedArd = [...ard].sort((a, b) => a.rate - b.rate);
+    searchAcceptanceVP.refresh(sortedArd, d => d.query, (ch, items) => {
       const rates = items.map(d => d.rate);
       ch.data.datasets[0].data = rates;
       ch.data.datasets[0].backgroundColor = rates.map(
-        r => r > 50 ? PALETTE.chart.errors : r > 20 ? PALETTE.chart.error_rate : PALETTE.chart.accepted
+        r => r >= 80 ? PALETTE.chart.accepted : r >= 50 ? PALETTE.chart.error_rate : PALETTE.chart.errors
+      );
+    });
+  }
+
+  // Search terms: sale rate
+  const srd = (data.sale_rate_data || []).slice();
+  if (searchSaleRateVP && srd.length) {
+    searchSaleRateRawData = srd;
+    const sortedSrd = [...srd].sort((a, b) => a.rate - b.rate);
+    searchSaleRateVP.refresh(sortedSrd, d => d.query, (ch, items) => {
+      const rates = items.map(d => d.rate);
+      ch.data.datasets[0].data = rates;
+      ch.data.datasets[0].backgroundColor = rates.map(
+        r => r >= 70 ? PALETTE.chart.accepted : r >= 40 ? PALETTE.chart.error_rate : PALETTE.chart.errors
       );
     });
   }
