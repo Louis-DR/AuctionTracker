@@ -16,11 +16,46 @@ from auction_tracker.config import ClassifierConfig
 logger = logging.getLogger(__name__)
 
 
+_IMAGE_MAGIC_PREFIXES: tuple[bytes, ...] = (
+  b"\xff\xd8",       # JPEG
+  b"\x89PNG",        # PNG
+  b"GIF8",           # GIF
+  b"RIFF",           # WebP (RIFF....WEBP)
+  b"\x00\x00\x00",   # MP4 / ISO base media (skip gracefully later)
+)
+
+_TEXT_CONTENT_PREFIXES: tuple[bytes, ...] = (
+  b"<",    # HTML / SVG / XML
+  b"{",    # JSON error page
+)
+
+
+def _is_valid_image_content(data: bytes) -> bool:
+  """Return True if *data* looks like a real image file.
+
+  Rejects SVG/HTML/JSON error pages that CDNs sometimes serve with
+  HTTP 200 instead of the requested image.  Checks only the first few
+  bytes (magic numbers) so that large images are not read into RAM.
+  """
+  if len(data) < 4:
+    return False
+  if data[:1] in (b"<", b"{"):
+    return False
+  for prefix in _IMAGE_MAGIC_PREFIXES:
+    if data[: len(prefix)] == prefix:
+      return True
+  return False
+
+
 async def download_image(url: str, destination: Path, timeout: float = 30.0) -> bool:
   """Download a single image from a URL.
 
   Uses curl_cffi for consistency with the HTTP transport. Returns
   True on success, False on failure (logged but not raised).
+
+  Rejects responses whose body is an HTML/SVG/JSON placeholder rather
+  than a real image (some CDNs return HTTP 200 with a fallback SVG
+  when the original asset is unavailable).
   """
   try:
     from curl_cffi.requests import AsyncSession
@@ -28,11 +63,18 @@ async def download_image(url: str, destination: Path, timeout: float = 30.0) -> 
     destination.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncSession() as session:
       response = await session.get(url, timeout=timeout)
-      if response.status_code == 200:
-        destination.write_bytes(response.content)
-        return True
-      logger.warning("Image download HTTP %d for %s", response.status_code, url)
-      return False
+      if response.status_code != 200:
+        logger.warning("Image download HTTP %d for %s", response.status_code, url)
+        return False
+      data = response.content
+      if not _is_valid_image_content(data):
+        logger.debug(
+          "Image at %s has non-image content (first bytes: %r) — skipped",
+          url, data[:16],
+        )
+        return False
+      destination.write_bytes(data)
+      return True
   except Exception:
     logger.debug("Failed to download image: %s", url, exc_info=True)
     return False

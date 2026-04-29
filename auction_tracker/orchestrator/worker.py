@@ -721,7 +721,7 @@ class WebsiteWorker:
 
       # Transaction 2: download images and classify (may await
       # network I/O, so this MUST be outside the ingest session).
-      if self._classify and scraped.image_urls:
+      if self._classify:
         self._flush_utilization()
         await self._classify_and_filter(
           item.listing_id, scraped,
@@ -1127,6 +1127,13 @@ class WebsiteWorker:
     Opens its own short-lived DB session for the classifier
     verdict so that no write lock is held during the (potentially
     slow) image downloads.
+
+    When no valid images are available (either because the listing
+    has no image URLs, or because all downloads failed), the listing
+    is accepted by default and ``classifier_accepted = "1"`` is
+    written without a score.  This ensures the web view always shows
+    a classifier result for fully-fetched listings and makes image
+    download failures visible rather than silently hiding them.
     """
     from auction_tracker.orchestrator.images import (
       classify_listing as run_classification,
@@ -1134,16 +1141,29 @@ class WebsiteWorker:
       download_listing_images,
     )
 
+    classifier_config = self._config.classifier
+
+    if not scraped.image_urls:
+      # Listing was parsed successfully but the page returned no image
+      # URLs (common for classifieds with no photos, or when the parser
+      # could not locate the image gallery).  Accept by default.
+      with self._database.session() as session:
+        self._repo.upsert_listing_attribute(
+          session, listing_id, "classifier_accepted", "1",
+        )
+        session.commit()
+      logger.debug(
+        "[%s] No image URLs for %s — accepted by default",
+        self._name, scraped.external_id,
+      )
+      return
+
     # Determine how many images to download.  When the listing's current
     # price already meets or exceeds the high-value threshold, download
     # all available images instead of the default cap so that expensive
     # items are fully archived from the start.
     max_count: int | None = None
-    classifier_config = self._config.classifier
-    if (
-      classifier_config.image_max_price_eur is not None
-      and scraped.image_urls
-    ):
+    if classifier_config.image_max_price_eur is not None:
       with self._database.session() as price_session:
         listing_row = price_session.get(Listing, listing_id)
         if (
@@ -1167,6 +1187,19 @@ class WebsiteWorker:
       max_count=max_count,
     )
     if not image_paths:
+      # Image URLs were present but all downloads failed (CDN block,
+      # network error, or non-image content rejected by the validator).
+      # Accept by default rather than silently leaving the listing
+      # without any classifier verdict.
+      with self._database.session() as session:
+        self._repo.upsert_listing_attribute(
+          session, listing_id, "classifier_accepted", "1",
+        )
+        session.commit()
+      logger.debug(
+        "[%s] All image downloads failed for %s (%d URL(s)) — accepted by default",
+        self._name, scraped.external_id, len(scraped.image_urls),
+      )
       return
 
     # CPU-bound classification (synchronous, fast).

@@ -670,6 +670,11 @@ def fix_database(app: AppContext) -> None:
      ``stuck-in-ENDING → blanket UNSOLD`` heuristic that ignored bid
      count.  The next watch cycle will re-evaluate them using the
      tightened logic and the visible-page sold markers.
+  6. Repair listings missing ``classifier_accepted`` attributes. Active
+     listings are reset to ``is_fully_fetched=False`` so they get
+     re-fetched and classified on the next run. Terminal listings
+     (SOLD/UNSOLD/CANCELLED) receive a synthetic ``classifier_accepted=1``
+     so the web view is not blank for them.
   """
   import json
   from datetime import datetime, timedelta
@@ -907,6 +912,108 @@ def fix_database(app: AppContext) -> None:
     else:
       console.print(
         "[dim]No UNSOLD-with-bids listings to revert.[/dim]"
+      )
+
+  # ------------------------------------------------------------------
+  # Step 6: repair listings missing classifier attributes
+  # ------------------------------------------------------------------
+  # Two root causes leave fully-fetched listings with no
+  # ``classifier_accepted`` attribute:
+  #
+  #   1. The listing had no image URLs (parser returned none, or the
+  #      site was soft-blocked at fetch time).
+  #
+  #   2. All image downloads failed silently (CDN block, non-image
+  #      content returned with HTTP 200, etc.), causing
+  #      ``_classify_and_filter`` to hit ``if not image_paths: return``
+  #      before writing any attributes.
+  #
+  # Both cases are now fixed in the worker so fresh fetches always
+  # produce a verdict.  For the historical backlog we take two actions:
+  #
+  #   a. ACTIVE / non-terminal listings: reset ``is_fully_fetched``
+  #      so the next worker cycle re-fetches them and runs
+  #      classification.
+  #
+  #   b. Terminal listings (SOLD / UNSOLD / CANCELLED): they will
+  #      never be re-fetched, so we write ``classifier_accepted = "1"``
+  #      as a synthetic pass-through marker so the web view is not
+  #      blank.
+  # ------------------------------------------------------------------
+  terminal_statuses_cls = (
+    ListingStatus.SOLD,
+    ListingStatus.UNSOLD,
+    ListingStatus.CANCELLED,
+  )
+
+  with app.database.session() as session:
+    # Sub-query: listing IDs that already have a classifier verdict.
+    classified_ids_sq = (
+      select(ListingAttribute.listing_id)
+      .where(ListingAttribute.attribute_name == "classifier_accepted")
+      .scalar_subquery()
+    )
+
+    # Enabled website IDs (ignore disabled sites like todocoleccion).
+    enabled_website_ids = session.execute(
+      select(Website.id)
+      .where(Website.name.in_(list(app.config.websites)))
+    ).scalars().all()
+
+    # a) Non-terminal ACTIVE listings without classifier verdict →
+    #    reset is_fully_fetched so they get re-fetched + classified.
+    active_reset = session.execute(
+      _sa_update(Listing)
+      .where(Listing.is_fully_fetched.is_(True))
+      .where(Listing.status.not_in(terminal_statuses_cls))
+      .where(Listing.website_id.in_(enabled_website_ids))
+      .where(Listing.id.not_in(classified_ids_sq))
+      .values(is_fully_fetched=False)
+    )
+    active_reset_count = active_reset.rowcount
+
+    # b) Terminal listings without classifier verdict → synthetic pass.
+    #    Insert only; do not overwrite if an attribute already exists
+    #    (in case a partial write left an orphaned row).
+    terminal_unclassified = session.execute(
+      select(Listing.id)
+      .where(Listing.is_fully_fetched.is_(True))
+      .where(Listing.status.in_(terminal_statuses_cls))
+      .where(Listing.website_id.in_(enabled_website_ids))
+      .where(Listing.id.not_in(classified_ids_sq))
+    ).scalars().all()
+
+    for listing_id in terminal_unclassified:
+      session.add(
+        ListingAttribute(
+          listing_id=listing_id,
+          attribute_name="classifier_accepted",
+          attribute_value="1",
+        )
+      )
+
+    session.commit()
+
+    if active_reset_count:
+      console.print(
+        f"[green]Reset is_fully_fetched for {active_reset_count} active "
+        f"listing(s) without classifier verdict — they will be "
+        f"re-fetched and classified on the next run.[/green]"
+      )
+    else:
+      console.print(
+        "[dim]No active unclassified listings to reset.[/dim]"
+      )
+
+    if terminal_unclassified:
+      console.print(
+        f"[green]Added synthetic classifier_accepted=1 for "
+        f"{len(terminal_unclassified)} terminal listing(s) without "
+        f"a classifier verdict.[/green]"
+      )
+    else:
+      console.print(
+        "[dim]No terminal unclassified listings to patch.[/dim]"
       )
 
 
