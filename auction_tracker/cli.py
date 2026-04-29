@@ -664,6 +664,12 @@ def fix_database(app: AppContext) -> None:
   4. Reset LeBonCoin listings that were wrongly flagged as SOLD by the
      over-broad HTML sold-badge heuristic back to ACTIVE so the watch
      cycle can re-evaluate them using the authoritative JSON status.
+  5. Reset auction listings that were wrongly flagged as UNSOLD despite
+     having one or more bids back to ACTIVE — caused by a too-loose
+     ``"ended"`` substring match in the eBay parser and by a
+     ``stuck-in-ENDING → blanket UNSOLD`` heuristic that ignored bid
+     count.  The next watch cycle will re-evaluate them using the
+     tightened logic and the visible-page sold markers.
   """
   import json
   from datetime import datetime, timedelta
@@ -852,6 +858,56 @@ def fix_database(app: AppContext) -> None:
         )
       else:
         console.print("[dim]No recent LeBonCoin SOLD listings to revert.[/dim]")
+
+  # ------------------------------------------------------------------
+  # Step 5: revert auction UNSOLD-with-bids false positives
+  # ------------------------------------------------------------------
+  # Two regressions caused auction listings that did receive bids to
+  # be marked UNSOLD:
+  #
+  #   - The eBay parser's ``'"ENDED"' in script or '"ended"' in
+  #     script`` substring match flipped ``status=unsold`` for every
+  #     active listing whose Marko payload happened to contain the
+  #     word ``ended`` as a sub-string of an unrelated field name or
+  #     enum value.  When ``bidCount`` was 0 at fetch time (e.g. the
+  #     first listing snapshot, before any bids landed) the parser
+  #     committed UNSOLD several days before the auction's actual
+  #     end_time.
+  #   - The orchestrator's stuck-in-ENDING fallback in worker.py /
+  #     watcher.py force-marked any listing past ``ending_max_wait``
+  #     as UNSOLD without checking ``bid_count``, so every auction
+  #     where the parser couldn't return a usable status post-end
+  #     was incorrectly flagged unsold even when it had bids.
+  #
+  # Both are now fixed.  Reset every UNSOLD listing whose stored
+  # ``bid_count > 0`` back to ACTIVE so the watch cycle re-evaluates
+  # them with the visible-page sold-marker scan and the bid-aware
+  # stuck-in-ENDING heuristic.  Final price is cleared so the next
+  # ingest re-derives it from a fresh page.
+  # ------------------------------------------------------------------
+  with app.database.session() as session:
+    result = session.execute(
+      _sa_update(Listing)
+      .where(Listing.status == ListingStatus.UNSOLD)
+      .where(Listing.bid_count > 0)
+      .values(
+        status=ListingStatus.ACTIVE,
+        final_price=None,
+        final_price_eur=None,
+      )
+    )
+    reverted_count = result.rowcount
+    if reverted_count:
+      session.commit()
+      console.print(
+        f"[green]Reverted {reverted_count} UNSOLD-with-bids listings "
+        f"back to ACTIVE.  They will be re-evaluated on the next "
+        f"watch cycle.[/green]"
+      )
+    else:
+      console.print(
+        "[dim]No UNSOLD-with-bids listings to revert.[/dim]"
+      )
 
 
 # -------------------------------------------------------------------
