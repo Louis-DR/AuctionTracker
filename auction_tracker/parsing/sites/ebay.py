@@ -323,7 +323,7 @@ class EbayParser(Parser):
 
     # Status.
     status = _derive_status(
-      data_script, bid_count, end_time, listing_type, qty_available,
+      html, data_script, bid_count, end_time, listing_type, qty_available,
     )
 
     # Final price (for ended auctions).
@@ -692,7 +692,50 @@ def _detect_card_listing_type(card_html: str) -> str | None:
 # ------------------------------------------------------------------
 
 
+# Visible-page indicators that an auction or listing has been sold.  The
+# strings are case-insensitive and matched against the HTML body.  When
+# any of these match, the listing is unambiguously sold regardless of
+# script-side flags or bid counts — eBay only renders these messages
+# after an actual purchase / winning bid.  Each entry is paired with
+# the language(s) where it appears.
+_SOLD_PAGE_MARKERS: tuple[str, ...] = (
+  # German
+  "artikel verkauft am",
+  "verkauft am ",
+  # English (UK / US / .com)
+  "this item sold on",
+  "item sold on ",
+  "sold for ",
+  # French
+  "vendu le ",
+  "objet vendu le",
+  # Spanish
+  "vendido el ",
+  "artículo vendido el",
+  # Italian
+  "venduto il ",
+  "oggetto venduto il",
+)
+
+
+def _has_sold_page_marker(html: str) -> bool:
+  """Return True when the visible HTML shows a sold confirmation banner.
+
+  Used as a definitive override on top of the script-flag heuristics:
+  eBay only renders these strings after a winning bid / completed
+  Buy-It-Now and they appear in every locale of the closed-listing
+  view, so they correctly catch the German / French / Italian / etc.
+  cases that the script-only logic missed when ``bidCount`` was 0
+  at fetch time but the auction subsequently sold.
+  """
+  if not html:
+    return False
+  lower = html.lower()
+  return any(marker in lower for marker in _SOLD_PAGE_MARKERS)
+
+
 def _derive_status(
+  html: str,
   script: str,
   bid_count: int,
   end_time: datetime | None,
@@ -704,6 +747,14 @@ def _derive_status(
   Buy Now listings use stock status. Auction listings use bid count
   and end time.
   """
+  # Visible "Artikel verkauft am" / "Item sold on" / "Vendu le" /
+  # "Vendido el" / "Venduto il" messages are an unambiguous sold
+  # signal that works in every locale — apply it first regardless of
+  # listing type so a hybrid auction sold via Sofort-Kaufen is
+  # detected even when the script's ``bidCount`` reads 0.
+  if _has_sold_page_marker(html):
+    return "sold"
+
   if listing_type == "buy_now":
     out_of_stock_match = re.search(r'"outOfStock"\s*:\s*(true|false)', script)
     if out_of_stock_match and out_of_stock_match.group(1) == "true":
@@ -716,7 +767,18 @@ def _derive_status(
       return "cancelled"
     return "active"
 
-  if '"ENDED"' in script or '"ended"' in script:
+  # Strict ENDED / ended marker: require an explicit boolean true so a
+  # stray ``"endedReason"`` or ``"viewItemMode":"ended"`` field on a
+  # still-live page does not flip the status terminal.  The previous
+  # ``'"ENDED"' in script or '"ended"' in script`` substring check
+  # caused listings to be marked UNSOLD several days before their
+  # actual end time whenever the Marko payload happened to embed the
+  # word.
+  ended_match = re.search(
+    r'"(?:ENDED|ended|isEnded|listingEnded)"\s*:\s*true',
+    script,
+  )
+  if ended_match:
     return "sold" if bid_count > 0 else "unsold"
 
   if end_time:

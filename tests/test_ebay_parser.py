@@ -351,25 +351,74 @@ class TestHelperFunctions:
   def test_derive_status_active_auction(self):
     from datetime import datetime
     future = datetime(2099, 1, 1, tzinfo=UTC)
-    assert _derive_status("", 3, future, "auction", None) == "active"
+    assert _derive_status("", "", 3, future, "auction", None) == "active"
 
   def test_derive_status_ended_sold(self):
-    assert _derive_status('"ENDED"', 5, None, "auction", None) == "sold"
+    assert _derive_status(
+      "", '"ENDED": true', 5, None, "auction", None,
+    ) == "sold"
 
   def test_derive_status_ended_unsold(self):
-    assert _derive_status('"ENDED"', 0, None, "auction", None) == "unsold"
+    assert _derive_status(
+      "", '"ENDED": true', 0, None, "auction", None,
+    ) == "unsold"
 
   def test_derive_status_buy_now_active_single_unit(self):
-    assert _derive_status("", 0, None, "buy_now", 1) == "active"
+    assert _derive_status("", "", 0, None, "buy_now", 1) == "active"
 
   def test_derive_status_buy_now_active_unknown_qty(self):
     # qty_available == None means the page did not expose stock count; treat
     # as a single listing and leave active.
-    assert _derive_status("", 0, None, "buy_now", None) == "active"
+    assert _derive_status("", "", 0, None, "buy_now", None) == "active"
 
   def test_derive_status_buy_now_multi_unit_cancelled(self):
-    assert _derive_status("", 0, None, "buy_now", 2) == "cancelled"
-    assert _derive_status("", 0, None, "buy_now", 50) == "cancelled"
+    assert _derive_status("", "", 0, None, "buy_now", 2) == "cancelled"
+    assert _derive_status("", "", 0, None, "buy_now", 50) == "cancelled"
 
   def test_derive_status_buy_now_sold_out(self):
-    assert _derive_status("", 0, None, "buy_now", 0) == "sold"
+    assert _derive_status("", "", 0, None, "buy_now", 0) == "sold"
+
+  def test_derive_status_loose_ended_substring_does_not_trigger(self):
+    """'"ended"' as a substring (e.g. an unrelated field name) must
+    not flip an active listing to UNSOLD.
+
+    Regression: the previous ``'"ended"' in script`` check matched
+    every Marko payload that mentioned the word "ended" in any
+    field, causing live auctions with ``bidCount=0`` to be marked
+    UNSOLD several days before their actual end time.
+    """
+    from datetime import datetime
+    future = datetime(2099, 1, 1, tzinfo=UTC)
+    # Various plausible field names that contain "ended" but are
+    # NOT a definitive ended-state flag.
+    for noisy_script in (
+      '"endedReason":"none"',
+      '"viewItemMode":"ended"',
+      '"isEnded":false',
+      '"hasEndedAt":null',
+      '"ended":false',
+      '"ENDED":false',
+    ):
+      assert _derive_status(
+        "", noisy_script, 0, future, "auction", None,
+      ) == "active", f"false positive on {noisy_script!r}"
+
+  def test_derive_status_html_sold_marker_overrides(self):
+    """Visible "Artikel verkauft am" / "Item sold on" / "Vendu le"
+    indicators are an unambiguous sold signal regardless of bid
+    count or end_time, in any locale eBay supports."""
+    from datetime import datetime
+    future = datetime(2099, 1, 1, tzinfo=UTC)
+    cases = [
+      "<html><body>Artikel verkauft am Sa, 25. Apr um 01:11</body></html>",
+      "<html><body>This item sold on Apr 25, 2026 01:11.</body></html>",
+      "<html><body>Vendu le 25 avr. à 01:11</body></html>",
+      "<html><body>Vendido el 25 abr. a las 01:11</body></html>",
+      "<html><body>Venduto il 25 apr. alle 01:11</body></html>",
+    ]
+    for html in cases:
+      # All zero-bid auctions, end_time still in the future — without
+      # the HTML override the parser would say "active".
+      assert _derive_status(
+        html, "", 0, future, "auction", None,
+      ) == "sold", f"missed sold marker in {html!r}"
