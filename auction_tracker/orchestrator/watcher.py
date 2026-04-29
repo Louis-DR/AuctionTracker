@@ -298,14 +298,23 @@ class Watcher:
 
       max_wait = self._scheduler.ending_max_wait(tracked.strategy)
       if time_since_end > max_wait:
+        # See WebsiteWorker._process_watch_result for the same fix:
+        # default to SOLD when the auction received any bids, only
+        # fall back to UNSOLD for genuinely zero-bid closures.
+        guessed_status = (
+          ListingStatus.SOLD
+          if (listing.bid_count or 0) > 0
+          else ListingStatus.UNSOLD
+        )
         logger.warning(
-          "Listing %s [%s] stuck in ENDING for %.0fs, marking as UNSOLD",
+          "Listing %s [%s] stuck in ENDING for %.0fs (bids=%d) — marking %s",
           tracked.external_id, tracked.website_name, time_since_end,
+          listing.bid_count or 0, guessed_status.value,
         )
         tracked.is_terminal = True
         with self._database.session() as session:
           self._repo.mark_listing_status(
-            session, tracked.listing_id, ListingStatus.UNSOLD,
+            session, tracked.listing_id, guessed_status,
           )
           session.commit()
 

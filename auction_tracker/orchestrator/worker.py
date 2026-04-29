@@ -1026,17 +1026,30 @@ class WebsiteWorker:
       time_since_end = time.time() - tracked.end_time
       max_wait = self._scheduler.ending_max_wait(tracked.strategy)
       if time_since_end > max_wait:
+        # Without confirmation from the parser we cannot tell whether
+        # the listing closed sold or unsold, but bid count is a strong
+        # heuristic: any non-zero count means at least one buyer
+        # engaged, so the conservative default is SOLD.  The previous
+        # blanket UNSOLD verdict was wrong for every auction that did
+        # receive bids — including hybrid Sofort-Kaufen sales where
+        # the parser stops returning a usable status after closure.
+        guessed_status = (
+          ListingStatus.SOLD
+          if (listing.bid_count or 0) > 0
+          else ListingStatus.UNSOLD
+        )
         logger.warning(
-          "[%s] %s stuck in ENDING for %.0fs, marking UNSOLD",
+          "[%s] %s stuck in ENDING for %.0fs (bids=%d) — marking %s",
           self._name, tracked.external_id, time_since_end,
+          listing.bid_count or 0, guessed_status.value,
         )
         tracked.is_terminal = True
         self._repo.mark_listing_status(
-          session, tracked.listing_id, ListingStatus.UNSOLD,
+          session, tracked.listing_id, guessed_status,
         )
         self._apply_image_retention_policy(
           tracked.listing_id,
-          ListingStatus.UNSOLD,
+          guessed_status,
           listing.final_price_eur,
           listing.current_price_eur,
         )
